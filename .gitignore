@@ -1,0 +1,8 @@
+# clickstack-ui/scripts/dashboard-loader.py export output
+/out/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/

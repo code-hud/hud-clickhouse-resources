@@ -1,0 +1,1789 @@
+{
+  "format": "hud-clickstack-dashboards/v1",
+  "exported_from": {
+    "base_url": "http://localhost:8080",
+    "sources": [
+      {
+        "id": "6af4960727939662854d75df",
+        "name": "Hud investigations",
+        "kind": "log",
+        "database": "hud_otel",
+        "table": "otel_logs"
+      },
+      {
+        "id": "6afc5a0000000000000000b1",
+        "name": "Hud endpoints",
+        "kind": "log",
+        "database": "hud_otel",
+        "table": "endpoints",
+        "role": "labels",
+        "spec": {
+          "kind": "log",
+          "timestampValueExpression": "now64(3) - INTERVAL 1 MINUTE",
+          "defaultTableSelectExpression": "env, service, flow",
+          "bodyExpression": "flow",
+          "implicitColumnExpression": "flow"
+        }
+      },
+      {
+        "id": "6afc5a0000000000000000b2",
+        "name": "Hud functions",
+        "kind": "log",
+        "database": "hud_otel",
+        "table": "functions",
+        "role": "labels",
+        "spec": {
+          "kind": "log",
+          "timestampValueExpression": "now64(3) - INTERVAL 1 MINUTE",
+          "defaultTableSelectExpression": "env, service, flow, function",
+          "bodyExpression": "function",
+          "implicitColumnExpression": "function"
+        }
+      }
+    ],
+    "connections": [
+      {
+        "id": "6af4960727939662854d75db",
+        "name": "Hud ClickHouse"
+      }
+    ]
+  },
+  "dashboards": [
+    {
+      "id": "6afc5a0000000000000000a1",
+      "name": "Hud: 1. Services",
+      "tiles": [
+        {
+          "id": "t2665e5c239",
+          "x": 0,
+          "y": 0,
+          "w": 12,
+          "h": 4,
+          "name": "Services",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT uniqExact(service) AS Services FROM hud_otel.process_metrics\nWHERE t >= $__toTime - INTERVAL 30 MINUTE AND t < $__toTime AND $__filter(env, $env)",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 0,
+              "thousandSeparated": true
+            }
+          },
+          "description": "Running now"
+        },
+        {
+          "id": "td6ac9a93f8",
+          "x": 12,
+          "y": 0,
+          "w": 12,
+          "h": 4,
+          "name": "Live sessions",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT uniqExact(instance) AS `Live sessions` FROM hud_otel.process_metrics\nWHERE t >= $__toTime - INTERVAL 30 MINUTE AND t < $__toTime AND $__filter(env, $env)",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 0,
+              "thousandSeparated": true
+            }
+          },
+          "description": "All services"
+        },
+        {
+          "id": "t795b02117b",
+          "x": 0,
+          "y": 4,
+          "w": 24,
+          "h": 18,
+          "name": "Services — click one for its overview • Live session: reported in the last 30 min • Running: has a live session",
+          "config": {
+            "configType": "sql",
+            "displayType": "table",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT service AS Service, if(live > 0, 'Running', 'Not running') AS Status, toUInt32(live) AS `Live sessions`,\n    toUInt32(fns) AS `Functions invoked`, toUInt32(flows) AS `Flows invoked`,\n    if(seen > 0, round(dateDiff('second', seen, $__toTime) / 60, 1), NULL) AS `Last seen (min ago)`,\n    round(100 * errs / nullIf(runs, 0), 1) AS `Err Rate %`, ${env:sqlstring} AS Env\nFROM (SELECT service, uniqExact(instance) AS sess FROM (SELECT t, service, instance FROM hud_otel.process_metrics WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env)\n  UNION ALL SELECT hour AS t, service, instance FROM hud_otel.process_metrics_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env)\n  UNION ALL SELECT hour AS t, service, instance FROM hud_otel.process_metrics_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env)) GROUP BY service) AS ss\nLEFT JOIN (SELECT service, uniqExact(instance) AS live FROM hud_otel.process_metrics\n    WHERE t >= $__toTime - INTERVAL 30 MINUTE AND t < $__toTime AND $__filter(env, $env) GROUP BY service) AS lv USING (service)\nLEFT JOIN (SELECT service, uniqExact(function) AS fns FROM hud_otel.functions\n    WHERE last_seen >= $__fromTime AND $__filter(env, $env) GROUP BY service) AS fn USING (service)\nLEFT JOIN (SELECT service, uniqExactIf(flow, r > 0) AS flows, sum(r) AS runs, sum(e) AS errs, max(ls) AS seen FROM (\n    SELECT service, flow, sum(runs) AS r, sum(errors) + sumIf(issues, flow_type != 'http') AS e, max(last_seen) AS ls\n    FROM (SELECT t, service, flow, flow_type, duration_count AS runs, if(startsWith(status_code, '5'), duration_count, 0) AS errors, 0 AS issues, last_seen FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env)\n  UNION ALL SELECT t, service, flow, flow_type, 0 AS runs, 0 AS errors, issues, last_seen FROM hud_otel.endpoint_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env)\n  UNION ALL SELECT hour AS t, service, flow, flow_type, duration_count AS runs, if(startsWith(status_code, '5'), duration_count, 0) AS errors, issues, last_seen FROM hud_otel.endpoint_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env)\n  UNION ALL SELECT hour AS t, service, flow, flow_type, duration_count AS runs, if(startsWith(status_code, '5'), duration_count, 0) AS errors, issues, last_seen FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env))\n    GROUP BY service, flow) GROUP BY service) AS fl USING (service)\nWHERE sess > 0\nORDER BY live DESC, seen > 0 DESC, seen DESC, service\nLIMIT 500",
+            "onClick": {
+              "type": "dashboard",
+              "target": {
+                "mode": "id",
+                "id": "6afc5a0000000000000000a2"
+              },
+              "filters": [
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "service",
+                  "template": "{{Service}}"
+                },
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "env",
+                  "template": "{{Env}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "t74020f2678",
+          "x": 0,
+          "y": 22,
+          "w": 24,
+          "h": 7,
+          "name": "Runs/s by service (top 10)",
+          "config": {
+            "configType": "sql",
+            "displayType": "line",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT toStartOfInterval(t, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AS ts, service AS Service, sum(duration_count) / greatest(1, dateDiff('second', ts, least(ts + toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600))), least(toStartOfInterval($__toTime - INTERVAL 1 SECOND, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, 1, 3600))) + toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, 1, 3600)), now())))) AS `Runs/s`\nFROM (SELECT t, service, duration_count FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env)\n  UNION ALL SELECT hour AS t, service, duration_count FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600) AND hour >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND hour < $__toTime AND $__filter(env, $env))\nWHERE service IN (SELECT service FROM (SELECT t, service, duration_count FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env)\n  UNION ALL SELECT hour AS t, service, duration_count FROM hud_otel.endpoint_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env)\n  UNION ALL SELECT hour AS t, service, duration_count FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env))\n                  GROUP BY service ORDER BY sum(duration_count) DESC LIMIT 10)\nGROUP BY ts, Service ORDER BY Service, ts WITH FILL FROM toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) TO $__toTime STEP toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))",
+            "granularity": "auto",
+            "alignDateRangeToGranularity": true,
+            "fillNulls": false
+          }
+        }
+      ],
+      "tags": [
+        "hud"
+      ],
+      "savedQuery": null,
+      "savedQueryLanguage": null,
+      "savedFilterValues": [
+        {
+          "type": "sql",
+          "condition": "env IN ('production')"
+        }
+      ],
+      "filters": [
+        {
+          "id": "f-env",
+          "type": "QUERY_EXPRESSION",
+          "name": "Environment",
+          "variableName": "env",
+          "expression": "env",
+          "where": "flow = '') OR (flow = ''",
+          "whereLanguage": "sql",
+          "isBroadcastEnabled": true,
+          "isVariableEnabled": true,
+          "sourceId": "6afc5a0000000000000000b1",
+          "maxSelections": 1,
+          "minSelections": 1
+        }
+      ]
+    },
+    {
+      "id": "6afc5a0000000000000000a2",
+      "name": "Hud: 2. Service Overview",
+      "tiles": [
+        {
+          "id": "t3c61b1c96d",
+          "x": 0,
+          "y": 0,
+          "w": 24,
+          "h": 3,
+          "name": "Metrics",
+          "config": {
+            "displayType": "markdown",
+            "markdown": "Runs, errors, duration and machine metrics of the selected service."
+          }
+        },
+        {
+          "id": "te7b0202e53",
+          "x": 0,
+          "y": 3,
+          "w": 4,
+          "h": 3,
+          "name": "Runs",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT round(sum(runs)) AS Runs FROM (SELECT t, duration_count AS runs FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT hour AS t, duration_count AS runs FROM hud_otel.endpoint_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT hour AS t, duration_count AS runs FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service))",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 0,
+              "thousandSeparated": true
+            }
+          }
+        },
+        {
+          "id": "teadc2ecef7",
+          "x": 4,
+          "y": 3,
+          "w": 4,
+          "h": 3,
+          "name": "Runs vs prev week (%)",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT ifNull(round(100 * ((SELECT v FROM (SELECT sum(duration_count) AS v FROM hud_otel.endpoint_metrics_lean_1h WHERE hour + INTERVAL 1 HOUR > $__fromTime AND hour + INTERVAL 1 HOUR <= $__toTime AND $__filter(env, $env) AND $__filter(service, $service))) - (SELECT v FROM (SELECT sum(duration_count) AS v FROM hud_otel.endpoint_metrics_lean_1h WHERE hour + INTERVAL 1 HOUR > $__fromTime - INTERVAL 1 WEEK AND hour + INTERVAL 1 HOUR <= $__toTime - INTERVAL 1 WEEK AND $__filter(env, $env) AND $__filter(service, $service)))) / nullIf((SELECT v FROM (SELECT sum(duration_count) AS v FROM hud_otel.endpoint_metrics_lean_1h WHERE hour + INTERVAL 1 HOUR > $__fromTime - INTERVAL 1 WEEK AND hour + INTERVAL 1 HOUR <= $__toTime - INTERVAL 1 WEEK AND $__filter(env, $env) AND $__filter(service, $service))), 0), 1), 0) AS `Runs vs prev week`",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 1,
+              "thousandSeparated": true
+            }
+          },
+          "description": "Runs in the complete hours of the range against the same hours a week earlier."
+        },
+        {
+          "id": "t65aa91b2a0",
+          "x": 8,
+          "y": 3,
+          "w": 4,
+          "h": 3,
+          "name": "Err Rate (%)",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT round(100 * (sum(errors) + sumIf(issues, flow_type != 'http')) / sum(runs), 1) AS `Err Rate`\nFROM (SELECT t, flow_type, duration_count AS runs, if(startsWith(status_code, '5'), duration_count, 0) AS errors, 0 AS issues FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT t, flow_type, 0 AS runs, 0 AS errors, issues FROM hud_otel.endpoint_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT hour AS t, flow_type, duration_count AS runs, if(startsWith(status_code, '5'), duration_count, 0) AS errors, issues FROM hud_otel.endpoint_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT hour AS t, flow_type, duration_count AS runs, if(startsWith(status_code, '5'), duration_count, 0) AS errors, issues FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service))",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 1,
+              "thousandSeparated": true
+            }
+          }
+        },
+        {
+          "id": "te5356bcd51",
+          "x": 12,
+          "y": 3,
+          "w": 4,
+          "h": 3,
+          "name": "Flows",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT count() AS Flows FROM (SELECT flow FROM (SELECT t, flow, duration_count AS runs FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT hour AS t, flow, duration_count AS runs FROM hud_otel.endpoint_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT hour AS t, flow, duration_count AS runs FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service))\nGROUP BY flow HAVING sum(runs) > 0)",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 0,
+              "thousandSeparated": true
+            }
+          }
+        },
+        {
+          "id": "td506a4e2e2",
+          "x": 16,
+          "y": 3,
+          "w": 4,
+          "h": 3,
+          "name": "Functions",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT count() AS Functions FROM (SELECT function FROM (SELECT t, function, calls FROM hud_otel.function_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT hour AS t, function, calls FROM hud_otel.function_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT hour AS t, function, calls FROM hud_otel.function_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service))\nGROUP BY function HAVING sum(calls) > 0)",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 0,
+              "thousandSeparated": true
+            }
+          }
+        },
+        {
+          "id": "ta16298a384",
+          "x": 20,
+          "y": 3,
+          "w": 4,
+          "h": 3,
+          "name": "Sessions",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT uniqExact(instance) AS Sessions FROM (SELECT t, instance FROM hud_otel.process_metrics WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT hour AS t, instance FROM hud_otel.process_metrics_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT hour AS t, instance FROM hud_otel.process_metrics_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service))",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 0,
+              "thousandSeparated": true
+            }
+          }
+        },
+        {
+          "id": "t1f7559ba23",
+          "x": 0,
+          "y": 6,
+          "w": 24,
+          "h": 5,
+          "name": "Live alerts (firing now; click the flow for its page)",
+          "config": {
+            "configType": "sql",
+            "displayType": "table",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT 'HudEndpointErrorRateHigh' AS Alert, 'firing' AS State, f.flow AS Flow,\n    round(dateDiff('second', nullIf(min(lg.first_seen), toDateTime64(0, 9)), now()) / 60) AS `Active for (min)`, f.service AS Service, ${env:sqlstring} AS Env\nFROM (SELECT service, flow, sumIf(duration_count, startsWith(status_code, '5')) / sum(duration_count) AS ratio FROM hud_otel.endpoint_durations\n      WHERE t >= toStartOfMinute(now()) - INTERVAL 5 MINUTE AND $__filter(env, $env) AND $__filter(service, $service) GROUP BY service, flow) AS f\nLEFT JOIN (SELECT ServiceName AS service, LogAttributes['code.flow.name'] AS flow, min(Timestamp) AS first_seen FROM hud_otel.otel_logs\n      WHERE Timestamp >= now() - INTERVAL 24 HOUR AND EventName = 'hud.forensic' AND $__filter(ResourceAttributes['deployment.environment.name'], $env)\n      AND LogAttributes['hud.forensic.type'] = 'error' GROUP BY service, flow) AS lg ON lg.service = f.service AND lg.flow = f.flow\nWHERE f.ratio > 0.05\nGROUP BY f.service, f.flow ORDER BY Flow",
+            "onClick": {
+              "type": "dashboard",
+              "target": {
+                "mode": "id",
+                "id": "6afc5a0000000000000000a3"
+              },
+              "filters": [
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "service",
+                  "template": "{{Service}}"
+                },
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "flow",
+                  "template": "{{Flow}}"
+                },
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "env",
+                  "template": "{{Env}}"
+                }
+              ]
+            }
+          },
+          "description": "Evaluated inline: flows whose 5xx share over the last 5 minutes is above 5% (the HudEndpointErrorRateHigh rule). ClickStack has no AMP ruler."
+        },
+        {
+          "id": "t3392cd58ff",
+          "x": 0,
+          "y": 11,
+          "w": 8,
+          "h": 6,
+          "name": "Runs per minute by flow type",
+          "config": {
+            "configType": "sql",
+            "displayType": "line",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT toStartOfInterval(t, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AS ts, flow_type AS `Flow type`, sum(duration_count) * 60 / greatest(1, dateDiff('second', ts, least(ts + toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600))), least(toStartOfInterval($__toTime - INTERVAL 1 SECOND, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, 1, 3600))) + toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, 1, 3600)), now())))) AS `Runs/min`\nFROM (SELECT t, flow_type, duration_count FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT hour AS t, flow_type, duration_count FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600) AND hour >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service))\nGROUP BY ts, `Flow type` ORDER BY `Flow type`, ts WITH FILL FROM toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) TO $__toTime STEP toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))",
+            "granularity": "auto",
+            "alignDateRangeToGranularity": true,
+            "fillNulls": false
+          }
+        },
+        {
+          "id": "taae7909720",
+          "x": 8,
+          "y": 11,
+          "w": 8,
+          "h": 6,
+          "name": "Err Rate (%): 5xx of HTTP flows, issues of queues and custom flows",
+          "config": {
+            "configType": "sql",
+            "displayType": "line",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT toStartOfInterval(t, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AS ts, 100 * (sum(errors) + sumIf(issues, flow_type != 'http')) / nullIf(sum(runs), 0) AS `Err Rate`\nFROM (SELECT t, flow_type, duration_count AS runs, if(startsWith(status_code, '5'), duration_count, 0) AS errors, 0 AS issues FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT t, flow_type, 0 AS runs, 0 AS errors, issues FROM hud_otel.endpoint_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT hour AS t, flow_type, duration_count AS runs, if(startsWith(status_code, '5'), duration_count, 0) AS errors, issues FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600) AND hour >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service))\nGROUP BY ts ORDER BY ts",
+            "granularity": "auto",
+            "alignDateRangeToGranularity": true,
+            "fillNulls": false
+          }
+        },
+        {
+          "id": "t60cb45993e",
+          "x": 16,
+          "y": 11,
+          "w": 8,
+          "h": 6,
+          "name": "Flow duration, all flows (ms): Avg / P50 / P90 / P99",
+          "config": {
+            "configType": "sql",
+            "displayType": "line",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "WITH (q, buckets) -> if(empty(buckets), nan,\n  arrayFirst((v, c) -> c >= q * arrayCumSum(mapValues(buckets))[-1],\n    arrayMap((k, n, c) -> exp2((k + 1 - (c - q * arrayCumSum(mapValues(buckets))[-1]) / n) / 4),\n      mapKeys(buckets), mapValues(buckets), arrayCumSum(mapValues(buckets))),\n    arrayCumSum(mapValues(buckets)))) AS hud_duration_quantile\nSELECT ts, 1e3 * dur / runs AS Avg, 1e3 * hud_duration_quantile(0.5, bk) AS P50, 1e3 * hud_duration_quantile(0.9, bk) AS P90, 1e3 * hud_duration_quantile(0.99, bk) AS P99\nFROM (SELECT toStartOfInterval(t, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AS ts, sum(duration_sum) AS dur, sum(duration_count) AS runs, sumMap(buckets) AS bk\n      FROM (SELECT t, duration_sum, duration_count, buckets FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT hour AS t, duration_sum, duration_count, buckets FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600) AND hour >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)) GROUP BY ts HAVING runs > 0)\nORDER BY ts",
+            "granularity": "auto",
+            "alignDateRangeToGranularity": true,
+            "fillNulls": false
+          }
+        },
+        {
+          "id": "t6cd5d69b82",
+          "x": 0,
+          "y": 17,
+          "w": 8,
+          "h": 6,
+          "name": "CPU (% of limit)",
+          "config": {
+            "configType": "sql",
+            "displayType": "line",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT toStartOfInterval(t, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AS ts, 100 * sum(cpu_sum) / nullIf(sum(cpu_count), 0) AS Avg, 100 * maxIf(cpu_max, cpu_count > 0) AS Max\nFROM (SELECT * EXCEPT t, t FROM hud_otel.process_metrics WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT * EXCEPT hour, hour AS t FROM hud_otel.process_metrics_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600) AND hour >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)) GROUP BY ts HAVING sum(cpu_count) > 0 ORDER BY ts",
+            "granularity": "auto",
+            "alignDateRangeToGranularity": true,
+            "fillNulls": false
+          }
+        },
+        {
+          "id": "tcaae0234fc",
+          "x": 8,
+          "y": 17,
+          "w": 8,
+          "h": 6,
+          "name": "Memory (% of limit)",
+          "config": {
+            "configType": "sql",
+            "displayType": "line",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT toStartOfInterval(t, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AS ts, 100 * (sum(memory_sum) / sum(memory_count)) / avgIf(memory_limit, memory_limit > 0) AS Avg,\n    100 * maxIf(memory_max, memory_count > 0) / avgIf(memory_limit, memory_limit > 0) AS Max\nFROM (SELECT * EXCEPT t, t FROM hud_otel.process_metrics WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT * EXCEPT hour, hour AS t FROM hud_otel.process_metrics_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600) AND hour >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)) GROUP BY ts HAVING sum(memory_count) > 0 ORDER BY ts",
+            "granularity": "auto",
+            "alignDateRangeToGranularity": true,
+            "fillNulls": false
+          }
+        },
+        {
+          "id": "t07158aef29",
+          "x": 16,
+          "y": 17,
+          "w": 8,
+          "h": 6,
+          "name": "Event loop utilization (%)",
+          "config": {
+            "configType": "sql",
+            "displayType": "line",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT toStartOfInterval(t, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AS ts, 100 * sum(elu_sum) / nullIf(sum(elu_count), 0) AS Avg, 100 * maxIf(elu_max, elu_count > 0) AS Max\nFROM (SELECT * EXCEPT t, t FROM hud_otel.process_metrics WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT * EXCEPT hour, hour AS t FROM hud_otel.process_metrics_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600) AND hour >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)) GROUP BY ts HAVING sum(elu_count) > 0 ORDER BY ts",
+            "granularity": "auto",
+            "alignDateRangeToGranularity": true,
+            "fillNulls": false
+          }
+        },
+        {
+          "id": "tca37d81f60",
+          "x": 0,
+          "y": 23,
+          "w": 24,
+          "h": 3,
+          "name": "Flows",
+          "config": {
+            "displayType": "markdown",
+            "markdown": "HTTP, queue and custom flows. Click one for its page."
+          }
+        },
+        {
+          "id": "t811de155ab",
+          "x": 0,
+          "y": 26,
+          "w": 24,
+          "h": 14,
+          "name": "Flows: HTTP, queues and custom flows — click one for its page",
+          "config": {
+            "configType": "sql",
+            "displayType": "table",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "WITH (q, buckets) -> if(empty(buckets), nan,\n  arrayFirst((v, c) -> c >= q * arrayCumSum(mapValues(buckets))[-1],\n    arrayMap((k, n, c) -> exp2((k + 1 - (c - q * arrayCumSum(mapValues(buckets))[-1]) / n) / 4),\n      mapKeys(buckets), mapValues(buckets), arrayCumSum(mapValues(buckets))),\n    arrayCumSum(mapValues(buckets)))) AS hud_duration_quantile\nSELECT flow AS Flow, flow_type AS Type, round(runs) AS Runs, round(runs * 24 / greatest(intDiv({endDateMilliseconds:Int64}, 3600000) - intDiv({startDateMilliseconds:Int64}, 3600000), 1)) AS `Runs/Day`,\n    round(ifNull(100 * (cur - prev) / nullIf(prev, 0), 0), 1) AS `Runs vs prev week %`, round(100 * ifNull(errs, 0) / runs, 1) AS `Err Rate %`,\n    round(dur / 60, 2) AS `Dur Total (min)`, round(1000 * hud_duration_quantile(0.9, bk), 1) AS `P90 ms`, round(1000 * dur / runs, 1) AS `Avg ms`,\n    round(1000 * hud_duration_quantile(1, bk), 1) AS `P100 ms`, round(if(e2e_count = 0, 0, 1000 * e2e_sum / e2e_count), 1) AS `E2E avg ms (queues)`,\n    round(msgs) AS `Messages (queues)`, service AS Service, ${env:sqlstring} AS Env\nFROM (SELECT service, flow, flow_type, sum(duration_count) AS runs, sum(duration_sum) AS dur, sumMap(buckets) AS bk, sum(e2e_count) AS e2e_count,\n          sum(e2e_sum) AS e2e_sum, sum(messages) AS msgs, sumIf(duration_count, startsWith(status_code, '5')) AS errs5\n      FROM (SELECT t, service, flow, flow_type, status_code, duration_count, duration_sum, buckets, e2e_count, e2e_sum, 0 AS messages FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT t, service, flow, flow_type, status_code, 0 AS duration_count, 0 AS duration_sum, CAST(map(), 'Map(Int16, UInt64)') AS buckets, 0 AS e2e_count, 0 AS e2e_sum, messages FROM hud_otel.endpoint_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT hour AS t, service, flow, flow_type, status_code, duration_count, duration_sum, buckets, e2e_count, e2e_sum, messages FROM hud_otel.endpoint_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT hour AS t, service, flow, flow_type, status_code, duration_count, duration_sum, buckets, e2e_count, e2e_sum, messages FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service))\n      GROUP BY service, flow, flow_type) AS m\nLEFT JOIN (SELECT service, flow, flow_type, sumIf(issues, flow_type != 'http') AS iss FROM (SELECT t, service, flow, flow_type, issues FROM hud_otel.endpoint_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT hour AS t, service, flow, flow_type, issues FROM hud_otel.endpoint_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT hour AS t, service, flow, flow_type, issues FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service))\n      GROUP BY service, flow, flow_type) AS i USING (service, flow, flow_type)\nLEFT JOIN (SELECT service, flow, flow_type, sum(duration_count) AS cur FROM (SELECT service, flow, flow_type, duration_count FROM hud_otel.endpoint_metrics_lean_1h WHERE hour + INTERVAL 1 HOUR > $__fromTime AND hour + INTERVAL 1 HOUR <= $__toTime AND $__filter(env, $env) AND $__filter(service, $service)) GROUP BY service, flow, flow_type) AS c USING (service, flow, flow_type)\nLEFT JOIN (SELECT service, flow, flow_type, sum(duration_count) AS prev FROM (SELECT service, flow, flow_type, duration_count FROM hud_otel.endpoint_metrics_lean_1h WHERE hour + INTERVAL 1 HOUR > $__fromTime - INTERVAL 1 WEEK AND hour + INTERVAL 1 HOUR <= $__toTime - INTERVAL 1 WEEK AND $__filter(env, $env) AND $__filter(service, $service)) GROUP BY service, flow, flow_type) AS p USING (service, flow, flow_type)\nARRAY JOIN [errs5 + iss] AS errs\nWHERE runs > 0\nORDER BY dur DESC\nLIMIT 500",
+            "onClick": {
+              "type": "dashboard",
+              "target": {
+                "mode": "id",
+                "id": "6afc5a0000000000000000a3"
+              },
+              "filters": [
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "service",
+                  "template": "{{Service}}"
+                },
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "flow",
+                  "template": "{{Flow}}"
+                },
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "env",
+                  "template": "{{Env}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "tc4161ad296",
+          "x": 0,
+          "y": 40,
+          "w": 24,
+          "h": 3,
+          "name": "Functions",
+          "config": {
+            "displayType": "markdown",
+            "markdown": "The functions that take the most time. Click one for its page."
+          }
+        },
+        {
+          "id": "t9e63aec9a9",
+          "x": 0,
+          "y": 43,
+          "w": 24,
+          "h": 12,
+          "name": "Functions in this service, top 100 by total time — click one for its page",
+          "config": {
+            "configType": "sql",
+            "displayType": "table",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "WITH (q, buckets) -> if(empty(buckets), nan,\n  arrayFirst((v, c) -> c >= q * arrayCumSum(mapValues(buckets))[-1],\n    arrayMap((k, n, c) -> exp2((k + 1 - (c - q * arrayCumSum(mapValues(buckets))[-1]) / n) / 4),\n      mapKeys(buckets), mapValues(buckets), arrayCumSum(mapValues(buckets))),\n    arrayCumSum(mapValues(buckets)))) AS hud_duration_quantile\nSELECT function AS Function, round(runs) AS Runs, round(runs * 24 / greatest(intDiv({endDateMilliseconds:Int64}, 3600000) - intDiv({startDateMilliseconds:Int64}, 3600000), 1)) AS `Runs/Day`, round(ifNull(100 * (cur - prev) / nullIf(prev, 0), 0), 1) AS `Runs vs prev week %`, round(100 * errs / runs, 1) AS `Err Rate %`, round(dur / 60, 2) AS `Dur Total (min)`, if(empty(bk), NULL, round(1000 * hud_duration_quantile(0.9, bk), 1)) AS `P90 ms`, if(cnt = 0, NULL, round(1000 * dur / cnt, 1)) AS `Avg ms`, if(empty(bk), NULL, round(1000 * hud_duration_quantile(1, bk), 1)) AS `P100 ms`, service AS Service, ${env:sqlstring} AS Env\nFROM (SELECT service, function, sum(calls) AS runs, sum(errors) AS errs, sum(duration_sum) AS dur, sum(duration_count) AS cnt, sumMap(buckets) AS bk\n      FROM (SELECT t, service, function, 0 AS calls, 0 AS errors, duration_sum, duration_count, buckets FROM hud_otel.function_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT t, service, function, calls, errors, 0 AS duration_sum, 0 AS duration_count, CAST(map(), 'Map(Int16, UInt64)') AS buckets FROM hud_otel.function_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT hour AS t, service, function, calls, errors, duration_sum, duration_count, buckets FROM hud_otel.function_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT hour AS t, service, function, calls, errors, duration_sum, duration_count, buckets FROM hud_otel.function_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)) GROUP BY service, function) AS m\nLEFT JOIN (SELECT service, function, sum(calls) AS cur FROM (SELECT service, function, calls FROM hud_otel.function_metrics_lean_1h WHERE hour + INTERVAL 1 HOUR > $__fromTime AND hour + INTERVAL 1 HOUR <= $__toTime AND $__filter(env, $env) AND $__filter(service, $service)) GROUP BY service, function) AS c USING (service, function)\nLEFT JOIN (SELECT service, function, sum(calls) AS prev FROM (SELECT service, function, calls FROM hud_otel.function_metrics_lean_1h WHERE hour + INTERVAL 1 HOUR > $__fromTime - INTERVAL 1 WEEK AND hour + INTERVAL 1 HOUR <= $__toTime - INTERVAL 1 WEEK AND $__filter(env, $env) AND $__filter(service, $service)) GROUP BY service, function) AS p USING (service, function)\nWHERE runs > 0\nORDER BY dur DESC\nLIMIT 100",
+            "onClick": {
+              "type": "dashboard",
+              "target": {
+                "mode": "id",
+                "id": "6afc5a0000000000000000a4"
+              },
+              "filters": [
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "service",
+                  "template": "{{Service}}"
+                },
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "function",
+                  "template": "{{Function}}"
+                },
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "env",
+                  "template": "{{Env}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "taa6a969d15",
+          "x": 0,
+          "y": 55,
+          "w": 24,
+          "h": 3,
+          "name": "Forensics",
+          "config": {
+            "displayType": "markdown",
+            "markdown": "Failed or slow requests Hud captured. Click a Forensic id for its page."
+          }
+        },
+        {
+          "id": "t4e1d942fc9",
+          "x": 0,
+          "y": 58,
+          "w": 24,
+          "h": 10,
+          "name": "Forensics (click one for its latest forensic)",
+          "config": {
+            "configType": "sql",
+            "displayType": "table",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT Timestamp AS Time, LogAttributes['hud.forensic.type'] AS Trigger, LogAttributes['code.flow.name'] AS Flow, JSONExtractString(Body, 'exceptions', 1, 'executionFlow', 1, 'function', 'code.function.name') AS Function, JSONExtractString(Body, 'exceptions', 1, 'name') AS Exception, LogAttributes['issue.fingerprint'] AS Forensic, ${env:sqlstring} AS Env FROM hud_otel.otel_logs WHERE Timestamp >= fromUnixTimestamp64Milli({startDateMilliseconds:Int64}) AND Timestamp < fromUnixTimestamp64Milli({endDateMilliseconds:Int64}) AND EventName = 'hud.forensic' AND $__filter(ResourceAttributes['deployment.environment.name'], $env) AND $__filter(ServiceName, $service) ORDER BY Timestamp DESC LIMIT 200",
+            "onClick": {
+              "type": "dashboard",
+              "target": {
+                "mode": "id",
+                "id": "6afc5a0000000000000000a5"
+              },
+              "filters": [
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "LogAttributes['issue.fingerprint']",
+                  "template": "{{Forensic}}"
+                },
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "env",
+                  "template": "{{Env}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "t178e32cd70",
+          "x": 0,
+          "y": 68,
+          "w": 24,
+          "h": 3,
+          "name": "Sessions",
+          "config": {
+            "displayType": "markdown",
+            "markdown": "One row per SDK session, with its pod, runs, errors and machine metrics."
+          }
+        },
+        {
+          "id": "t429946d376",
+          "x": 0,
+          "y": 71,
+          "w": 24,
+          "h": 5,
+          "name": "Sessions over time",
+          "config": {
+            "configType": "sql",
+            "displayType": "line",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT toStartOfInterval(t, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AS ts, uniqExact(instance) AS Sessions FROM (SELECT * EXCEPT t, t FROM hud_otel.process_metrics WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT * EXCEPT hour, hour AS t FROM hud_otel.process_metrics_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600) AND hour >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)) GROUP BY ts ORDER BY ts WITH FILL FROM toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) TO $__toTime STEP toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))",
+            "granularity": "auto",
+            "alignDateRangeToGranularity": true,
+            "fillNulls": false
+          }
+        },
+        {
+          "id": "te8e4b43a27",
+          "x": 0,
+          "y": 76,
+          "w": 24,
+          "h": 8,
+          "name": "Sessions — one row per SDK session in the range",
+          "config": {
+            "configType": "sql",
+            "displayType": "table",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT instance AS Session, pod AS `Pod Name`, round(runs) AS Runs, round(100 * errs / runs, 1) AS `Err Rate %`,\n    round((up_age + uptime) / 60, 1) AS `Started (min ago)`, round(up_age / 60, 1) AS `Last seen (min ago)`, round(100 * cpu, 1) AS `Max CPU %`,\n    round(100 * mem / nullIf(lim, 0), 1) AS `Max Mem %`, round(100 * elu, 1) AS `Max ELU %`, service AS Service\nFROM (SELECT service, instance, sum(runs) AS runs, sum(errors) + sumIf(issues, flow_type != 'http') AS errs\n      FROM (SELECT t, service, instance, flow_type, duration_count AS runs, if(startsWith(status_code, '5'), duration_count, 0) AS errors, 0 AS issues FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT t, service, instance, flow_type, 0 AS runs, 0 AS errors, issues FROM hud_otel.endpoint_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT hour AS t, service, instance, flow_type, duration_count AS runs, if(startsWith(status_code, '5'), duration_count, 0) AS errors, issues FROM hud_otel.endpoint_metrics_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT hour AS t, service, instance, flow_type, duration_count AS runs, if(startsWith(status_code, '5'), duration_count, 0) AS errors, issues FROM hud_otel.endpoint_metrics_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)) GROUP BY service, instance) AS r\nLEFT JOIN (SELECT service, instance, max(pod) AS pod, dateDiff('second', max(last_seen), $__toTime) AS up_age, max(uptime) AS uptime, max(cpu_max) AS cpu,\n          max(memory_max) AS mem, max(memory_limit) AS lim, max(elu_max) AS elu\n      FROM (SELECT t, service, instance, pod, last_seen, uptime, cpu_max, memory_max, memory_limit, elu_max FROM hud_otel.process_metrics WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT hour AS t, service, instance, pod, last_seen, uptime, cpu_max, memory_max, memory_limit, elu_max FROM hud_otel.process_metrics_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT hour AS t, service, instance, pod, last_seen, uptime, cpu_max, memory_max, memory_limit, elu_max FROM hud_otel.process_metrics_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service))\n      GROUP BY service, instance) AS s USING (service, instance)\nWHERE runs > 0\nORDER BY up_age + uptime ASC"
+          }
+        }
+      ],
+      "tags": [
+        "hud"
+      ],
+      "savedQuery": null,
+      "savedQueryLanguage": null,
+      "savedFilterValues": [
+        {
+          "type": "sql",
+          "condition": "env IN ('production')"
+        }
+      ],
+      "filters": [
+        {
+          "id": "f-env",
+          "type": "QUERY_EXPRESSION",
+          "name": "Environment",
+          "variableName": "env",
+          "expression": "env",
+          "where": "flow = '') OR (flow = ''",
+          "whereLanguage": "sql",
+          "isBroadcastEnabled": true,
+          "isVariableEnabled": true,
+          "sourceId": "6afc5a0000000000000000b1",
+          "maxSelections": 1,
+          "minSelections": 1
+        },
+        {
+          "id": "f-service",
+          "type": "QUERY_EXPRESSION",
+          "name": "Service",
+          "variableName": "service",
+          "expression": "service",
+          "where": "flow = '' AND $__filter(env, $env)) OR (flow = '' AND $__filter(env, $env)",
+          "whereLanguage": "sql",
+          "isBroadcastEnabled": true,
+          "isVariableEnabled": true,
+          "sourceId": "6afc5a0000000000000000b1"
+        }
+      ]
+    },
+    {
+      "id": "6afc5a0000000000000000a3",
+      "name": "Hud: 3. Flow",
+      "tiles": [
+        {
+          "id": "t02dc6c4d0d",
+          "x": 0,
+          "y": 0,
+          "w": 5,
+          "h": 3,
+          "name": "Runs",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT round(sum(duration_count)) AS Runs FROM (SELECT t, duration_count FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, duration_count FROM hud_otel.endpoint_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, duration_count FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint))",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 0,
+              "thousandSeparated": true
+            }
+          }
+        },
+        {
+          "id": "t20eb6b7c85",
+          "x": 5,
+          "y": 0,
+          "w": 5,
+          "h": 3,
+          "name": "Runs/Day",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT round(sum(duration_count) * 86400 / greatest(dateDiff('second', $__fromTime, $__toTime), 1)) AS `Runs/Day` FROM (SELECT t, duration_count FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, duration_count FROM hud_otel.endpoint_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, duration_count FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint))",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 0,
+              "thousandSeparated": true
+            }
+          }
+        },
+        {
+          "id": "t63154ae36b",
+          "x": 10,
+          "y": 0,
+          "w": 5,
+          "h": 3,
+          "name": "Runs vs prev week (%)",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT ifNull(round(100 * ((SELECT v FROM (SELECT sum(duration_count) AS v FROM hud_otel.endpoint_metrics_lean_1h WHERE hour + INTERVAL 1 HOUR > $__fromTime AND hour + INTERVAL 1 HOUR <= $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint))) - (SELECT v FROM (SELECT sum(duration_count) AS v FROM hud_otel.endpoint_metrics_lean_1h WHERE hour + INTERVAL 1 HOUR > $__fromTime - INTERVAL 1 WEEK AND hour + INTERVAL 1 HOUR <= $__toTime - INTERVAL 1 WEEK AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)))) / nullIf((SELECT v FROM (SELECT sum(duration_count) AS v FROM hud_otel.endpoint_metrics_lean_1h WHERE hour + INTERVAL 1 HOUR > $__fromTime - INTERVAL 1 WEEK AND hour + INTERVAL 1 HOUR <= $__toTime - INTERVAL 1 WEEK AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint))), 0), 1), 0) AS `Runs vs prev week`",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 1,
+              "thousandSeparated": true
+            }
+          },
+          "description": "Runs in the complete hours of the range against the same hours a week earlier."
+        },
+        {
+          "id": "t240ee63877",
+          "x": 15,
+          "y": 0,
+          "w": 5,
+          "h": 3,
+          "name": "Err Rate (%)",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT round(100 * (sum(errors) + sumIf(issues, flow_type != 'http')) / sum(runs), 1) AS `Err Rate`\nFROM (SELECT t, flow_type, duration_count AS runs, if(startsWith(status_code, '5'), duration_count, 0) AS errors, 0 AS issues FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT t, flow_type, 0 AS runs, 0 AS errors, issues FROM hud_otel.endpoint_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, flow_type, duration_count AS runs, if(startsWith(status_code, '5'), duration_count, 0) AS errors, issues FROM hud_otel.endpoint_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, flow_type, duration_count AS runs, if(startsWith(status_code, '5'), duration_count, 0) AS errors, issues FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint))",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 1,
+              "thousandSeparated": true
+            }
+          }
+        },
+        {
+          "id": "t214ef6459c",
+          "x": 20,
+          "y": 0,
+          "w": 4,
+          "h": 3,
+          "name": "Sessions",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT count() AS Sessions FROM (SELECT instance FROM (SELECT t, instance, duration_count AS runs FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, instance, duration_count AS runs FROM hud_otel.endpoint_metrics_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, instance, duration_count AS runs FROM hud_otel.endpoint_metrics_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint))\nGROUP BY instance HAVING sum(runs) > 0)",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 0,
+              "thousandSeparated": true
+            }
+          }
+        },
+        {
+          "id": "t48b19b5812",
+          "x": 0,
+          "y": 3,
+          "w": 5,
+          "h": 3,
+          "name": "Avg",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT round(1e3 * dur / runs, 1) AS `Avg` FROM (SELECT sum(duration_sum) AS dur, sum(duration_count) AS runs, sumMap(buckets) AS bk\nFROM (SELECT t, duration_sum, duration_count, buckets FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, duration_sum, duration_count, buckets FROM hud_otel.endpoint_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, duration_sum, duration_count, buckets FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)))",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 1,
+              "thousandSeparated": true,
+              "unit": "ms"
+            }
+          }
+        },
+        {
+          "id": "tb6f59e6ccb",
+          "x": 5,
+          "y": 3,
+          "w": 5,
+          "h": 3,
+          "name": "P90",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "WITH (q, buckets) -> if(empty(buckets), nan,\n  arrayFirst((v, c) -> c >= q * arrayCumSum(mapValues(buckets))[-1],\n    arrayMap((k, n, c) -> exp2((k + 1 - (c - q * arrayCumSum(mapValues(buckets))[-1]) / n) / 4),\n      mapKeys(buckets), mapValues(buckets), arrayCumSum(mapValues(buckets))),\n    arrayCumSum(mapValues(buckets)))) AS hud_duration_quantile\nSELECT round(1e3 * hud_duration_quantile(0.9, bk), 1) AS `P90` FROM (SELECT sum(duration_sum) AS dur, sum(duration_count) AS runs, sumMap(buckets) AS bk\nFROM (SELECT t, duration_sum, duration_count, buckets FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, duration_sum, duration_count, buckets FROM hud_otel.endpoint_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, duration_sum, duration_count, buckets FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)))",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 1,
+              "thousandSeparated": true,
+              "unit": "ms"
+            }
+          }
+        },
+        {
+          "id": "tfecd87d147",
+          "x": 10,
+          "y": 3,
+          "w": 5,
+          "h": 3,
+          "name": "P99",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "WITH (q, buckets) -> if(empty(buckets), nan,\n  arrayFirst((v, c) -> c >= q * arrayCumSum(mapValues(buckets))[-1],\n    arrayMap((k, n, c) -> exp2((k + 1 - (c - q * arrayCumSum(mapValues(buckets))[-1]) / n) / 4),\n      mapKeys(buckets), mapValues(buckets), arrayCumSum(mapValues(buckets))),\n    arrayCumSum(mapValues(buckets)))) AS hud_duration_quantile\nSELECT round(1e3 * hud_duration_quantile(0.99, bk), 1) AS `P99` FROM (SELECT sum(duration_sum) AS dur, sum(duration_count) AS runs, sumMap(buckets) AS bk\nFROM (SELECT t, duration_sum, duration_count, buckets FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, duration_sum, duration_count, buckets FROM hud_otel.endpoint_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, duration_sum, duration_count, buckets FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)))",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 1,
+              "thousandSeparated": true,
+              "unit": "ms"
+            }
+          }
+        },
+        {
+          "id": "t319bef3d8f",
+          "x": 15,
+          "y": 3,
+          "w": 5,
+          "h": 3,
+          "name": "P100",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "WITH (q, buckets) -> if(empty(buckets), nan,\n  arrayFirst((v, c) -> c >= q * arrayCumSum(mapValues(buckets))[-1],\n    arrayMap((k, n, c) -> exp2((k + 1 - (c - q * arrayCumSum(mapValues(buckets))[-1]) / n) / 4),\n      mapKeys(buckets), mapValues(buckets), arrayCumSum(mapValues(buckets))),\n    arrayCumSum(mapValues(buckets)))) AS hud_duration_quantile\nSELECT round(1e3 * hud_duration_quantile(1, bk), 1) AS `P100` FROM (SELECT sum(duration_sum) AS dur, sum(duration_count) AS runs, sumMap(buckets) AS bk\nFROM (SELECT t, duration_sum, duration_count, buckets FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, duration_sum, duration_count, buckets FROM hud_otel.endpoint_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, duration_sum, duration_count, buckets FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)))",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 1,
+              "thousandSeparated": true,
+              "unit": "ms"
+            }
+          }
+        },
+        {
+          "id": "t45a81f1eb6",
+          "x": 20,
+          "y": 3,
+          "w": 4,
+          "h": 3,
+          "name": "Dur Total",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT round(dur / 60, 2) AS `Dur Total` FROM (SELECT sum(duration_sum) AS dur, sum(duration_count) AS runs, sumMap(buckets) AS bk\nFROM (SELECT t, duration_sum, duration_count, buckets FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, duration_sum, duration_count, buckets FROM hud_otel.endpoint_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, duration_sum, duration_count, buckets FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)))",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 2,
+              "unit": "min"
+            }
+          }
+        },
+        {
+          "id": "teeabf11e46",
+          "x": 0,
+          "y": 6,
+          "w": 24,
+          "h": 5,
+          "name": "Issues in this flow",
+          "config": {
+            "configType": "sql",
+            "displayType": "table",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT if(lg.exc = '', m.fp, if(lg.fn = '', lg.exc, concat(lg.exc, ' in ', lg.fn))) AS Issue, left(splitByChar('\\n', lg.msg)[1], 120) AS Message,\n    m.result AS Result, round(sum(m.n)) AS Occurrences, m.fp AS Fingerprint, ${env:sqlstring} AS Env\nFROM (SELECT fingerprint AS fp, framework_result AS result, sum(issues) AS n\n      FROM (SELECT t, fingerprint, framework_result, issues FROM hud_otel.endpoint_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, fingerprint, framework_result, issues FROM hud_otel.endpoint_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, fingerprint, framework_result, issues FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)) GROUP BY fp, result) AS m\nLEFT JOIN (SELECT LogAttributes['issue.fingerprint'] AS fp, argMax(JSONExtractString(Body, 'exceptions', 1, 'name'), Timestamp) AS exc,\n          argMax(JSONExtractString(Body, 'exceptions', 1, 'executionFlow', 1, 'function', 'code.function.name'), Timestamp) AS fn,\n          argMax(JSONExtractString(Body, 'exceptions', 1, 'message'), Timestamp) AS msg\n      FROM hud_otel.otel_logs WHERE Timestamp >= now() - INTERVAL 7 DAY AND EventName = 'hud.forensic' AND LogAttributes['hud.forensic.type'] = 'error'\n      AND $__filter(ResourceAttributes['deployment.environment.name'], $env) GROUP BY fp) AS lg ON lg.fp = m.fp\nWHERE m.n > 0 GROUP BY m.fp, m.result, lg.exc, lg.fn, lg.msg ORDER BY Occurrences DESC",
+            "onClick": {
+              "type": "dashboard",
+              "target": {
+                "mode": "id",
+                "id": "6afc5a0000000000000000a5"
+              },
+              "filters": [
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "LogAttributes['issue.fingerprint']",
+                  "template": "{{Fingerprint}}"
+                },
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "env",
+                  "template": "{{Env}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "t6db75b5523",
+          "x": 0,
+          "y": 11,
+          "w": 16,
+          "h": 5,
+          "name": "Runs/s",
+          "config": {
+            "configType": "sql",
+            "displayType": "line",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT toStartOfInterval(t, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AS ts, sum(duration_count) / greatest(1, dateDiff('second', ts, least(ts + toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600))), least(toStartOfInterval($__toTime - INTERVAL 1 SECOND, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, 1, 3600))) + toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, 1, 3600)), now())))) AS `Runs/s` FROM (SELECT t, duration_count FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, duration_count FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600) AND hour >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)) GROUP BY ts ORDER BY ts WITH FILL FROM toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) TO $__toTime STEP toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))",
+            "granularity": "auto",
+            "alignDateRangeToGranularity": true,
+            "fillNulls": false
+          }
+        },
+        {
+          "id": "tef9a3cdbb3",
+          "x": 16,
+          "y": 11,
+          "w": 8,
+          "h": 10,
+          "name": "Exceptions in failed requests (forensics)",
+          "config": {
+            "configType": "sql",
+            "displayType": "table",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT JSONExtractString(Body, 'exceptions', 1, 'name') AS Exception, JSONExtractString(Body, 'exceptions', 1, 'executionFlow', 1, 'function', 'code.function.name') AS Function, count() AS Count FROM hud_otel.otel_logs WHERE Timestamp >= fromUnixTimestamp64Milli({startDateMilliseconds:Int64}) AND Timestamp < fromUnixTimestamp64Milli({endDateMilliseconds:Int64}) AND EventName = 'hud.forensic' AND $__filter(ResourceAttributes['deployment.environment.name'], $env) AND LogAttributes['hud.forensic.type'] = 'error' AND $__filter(ServiceName, $service) AND $__filter(LogAttributes['code.flow.name'], $endpoint) GROUP BY Exception, Function ORDER BY Count DESC"
+          }
+        },
+        {
+          "id": "tc6ca4ade8c",
+          "x": 0,
+          "y": 16,
+          "w": 16,
+          "h": 5,
+          "name": "Duration (ms): Avg / P90 / P99 / P100",
+          "config": {
+            "configType": "sql",
+            "displayType": "line",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "WITH (q, buckets) -> if(empty(buckets), nan,\n  arrayFirst((v, c) -> c >= q * arrayCumSum(mapValues(buckets))[-1],\n    arrayMap((k, n, c) -> exp2((k + 1 - (c - q * arrayCumSum(mapValues(buckets))[-1]) / n) / 4),\n      mapKeys(buckets), mapValues(buckets), arrayCumSum(mapValues(buckets))),\n    arrayCumSum(mapValues(buckets)))) AS hud_duration_quantile\nSELECT ts, 1e3 * dur / runs AS Avg, 1e3 * hud_duration_quantile(0.9, bk) AS P90, 1e3 * hud_duration_quantile(0.99, bk) AS P99, 1e3 * hud_duration_quantile(1, bk) AS P100\nFROM (SELECT toStartOfInterval(t, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AS ts, sum(duration_sum) AS dur, sum(duration_count) AS runs, sumMap(buckets) AS bk\n      FROM (SELECT t, duration_sum, duration_count, buckets FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, duration_sum, duration_count, buckets FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600) AND hour >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)) GROUP BY ts HAVING runs > 0)\nORDER BY ts",
+            "granularity": "auto",
+            "alignDateRangeToGranularity": true,
+            "fillNulls": false
+          }
+        },
+        {
+          "id": "t08b8f37251",
+          "x": 0,
+          "y": 21,
+          "w": 16,
+          "h": 5,
+          "name": "Err Rate (%)",
+          "config": {
+            "configType": "sql",
+            "displayType": "line",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT toStartOfInterval(t, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AS ts, 100 * (sum(errors) + sumIf(issues, flow_type != 'http')) / nullIf(sum(runs), 0) AS `Err Rate`\nFROM (SELECT t, flow_type, duration_count AS runs, if(startsWith(status_code, '5'), duration_count, 0) AS errors, 0 AS issues FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT t, flow_type, 0 AS runs, 0 AS errors, issues FROM hud_otel.endpoint_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, flow_type, duration_count AS runs, if(startsWith(status_code, '5'), duration_count, 0) AS errors, issues FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600) AND hour >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)) GROUP BY ts ORDER BY ts",
+            "granularity": "auto",
+            "alignDateRangeToGranularity": true,
+            "fillNulls": false
+          }
+        },
+        {
+          "id": "t3dcb3ee494",
+          "x": 16,
+          "y": 21,
+          "w": 8,
+          "h": 12,
+          "name": "Latest forensics (click a Forensic id for its page)",
+          "config": {
+            "configType": "sql",
+            "displayType": "table",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT LogAttributes['issue.fingerprint'] AS Forensic, Timestamp AS time, LogAttributes['hud.forensic.type'] AS Trigger, LogAttributes['code.flow.name'] AS Flow, LogAttributes['http.response.status_code'] AS Status, round(JSONExtractFloat(Body, 'duration') / 1e6, 1) AS `Duration ms`, JSONExtractString(Body, 'exceptions', 1, 'name') AS Exception, JSONExtractString(Body, 'exceptions', 1, 'executionFlow', 1, 'function', 'code.function.name') AS Function, JSONExtractString(Body, 'exceptions', 1, 'executionFlow', 1, 'caller', 'code.function.name') AS Caller, LogAttributes['hud.issue.caught'] AS Caught, JSONExtractString(Body, 's3_pointer') AS `Forensic (S3)`, ${env:sqlstring} AS Env FROM hud_otel.otel_logs WHERE Timestamp >= fromUnixTimestamp64Milli({startDateMilliseconds:Int64}) AND Timestamp < fromUnixTimestamp64Milli({endDateMilliseconds:Int64}) AND EventName = 'hud.forensic' AND $__filter(ResourceAttributes['deployment.environment.name'], $env) AND $__filter(ServiceName, $service) AND $__filter(LogAttributes['code.flow.name'], $endpoint) ORDER BY Timestamp DESC LIMIT 200",
+            "onClick": {
+              "type": "dashboard",
+              "target": {
+                "mode": "id",
+                "id": "6afc5a0000000000000000a5"
+              },
+              "filters": [
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "LogAttributes['issue.fingerprint']",
+                  "template": "{{Forensic}}"
+                },
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "env",
+                  "template": "{{Env}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "t45b2ebed65",
+          "x": 0,
+          "y": 26,
+          "w": 16,
+          "h": 5,
+          "name": "Queues: E2E avg (ms) and messages/s",
+          "config": {
+            "configType": "sql",
+            "displayType": "line",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT toStartOfInterval(t, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AS ts, 1e3 * sum(e2e_sum) / nullIf(sum(e2e_count), 0) AS `E2E avg ms`, sum(messages) / greatest(1, dateDiff('second', ts, least(ts + toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600))), least(toStartOfInterval($__toTime - INTERVAL 1 SECOND, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, 1, 3600))) + toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, 1, 3600)), now())))) AS `Messages/s`\nFROM (SELECT t, e2e_sum, e2e_count, 0 AS messages FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT t, 0 AS e2e_sum, 0 AS e2e_count, messages FROM hud_otel.endpoint_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, e2e_sum, e2e_count, messages FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600) AND hour >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)) GROUP BY ts HAVING sum(e2e_count) > 0 OR sum(messages) > 0 ORDER BY ts",
+            "granularity": "auto",
+            "alignDateRangeToGranularity": true,
+            "fillNulls": false
+          }
+        },
+        {
+          "id": "tf31f38e4da",
+          "x": 0,
+          "y": 31,
+          "w": 5,
+          "h": 5,
+          "name": "CPU (% of limit)",
+          "config": {
+            "configType": "sql",
+            "displayType": "line",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT toStartOfInterval(t, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AS ts, 100 * sum(cpu_sum) / nullIf(sum(cpu_count), 0) AS Avg, 100 * maxIf(cpu_max, cpu_count > 0) AS Max\nFROM (SELECT * EXCEPT t, t FROM hud_otel.process_metrics WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT * EXCEPT hour, hour AS t FROM hud_otel.process_metrics_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600) AND hour >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)) GROUP BY ts HAVING sum(cpu_count) > 0 ORDER BY ts",
+            "granularity": "auto",
+            "alignDateRangeToGranularity": true,
+            "fillNulls": false
+          }
+        },
+        {
+          "id": "ta89d46308b",
+          "x": 5,
+          "y": 31,
+          "w": 6,
+          "h": 5,
+          "name": "Event loop utilization (%)",
+          "config": {
+            "configType": "sql",
+            "displayType": "line",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT toStartOfInterval(t, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AS ts, 100 * sum(elu_sum) / nullIf(sum(elu_count), 0) AS Avg, 100 * maxIf(elu_max, elu_count > 0) AS Max\nFROM (SELECT * EXCEPT t, t FROM hud_otel.process_metrics WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT * EXCEPT hour, hour AS t FROM hud_otel.process_metrics_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600) AND hour >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)) GROUP BY ts HAVING sum(elu_count) > 0 ORDER BY ts",
+            "granularity": "auto",
+            "alignDateRangeToGranularity": true,
+            "fillNulls": false
+          }
+        },
+        {
+          "id": "t3e83aefd77",
+          "x": 11,
+          "y": 31,
+          "w": 5,
+          "h": 5,
+          "name": "Memory (% of limit)",
+          "config": {
+            "configType": "sql",
+            "displayType": "line",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT toStartOfInterval(t, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AS ts, 100 * (sum(memory_sum) / sum(memory_count)) / avgIf(memory_limit, memory_limit > 0) AS Avg,\n    100 * maxIf(memory_max, memory_count > 0) / avgIf(memory_limit, memory_limit > 0) AS Max\nFROM (SELECT * EXCEPT t, t FROM hud_otel.process_metrics WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT * EXCEPT hour, hour AS t FROM hud_otel.process_metrics_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600) AND hour >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)) GROUP BY ts HAVING sum(memory_count) > 0 ORDER BY ts",
+            "granularity": "auto",
+            "alignDateRangeToGranularity": true,
+            "fillNulls": false
+          }
+        },
+        {
+          "id": "t11128e9d13",
+          "x": 0,
+          "y": 36,
+          "w": 24,
+          "h": 6,
+          "name": "Status Codes",
+          "config": {
+            "configType": "sql",
+            "displayType": "table",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT if(code = '', 'no status code', code) AS `Status Code`, round(tn) AS Count, round(100 * tn / sum(tn) OVER (), 1) AS `Distribution %`,\n    round(1000 * td / tn, 1) AS `Avg ms`\nFROM (SELECT status_code AS code, sum(duration_count) AS tn, sum(duration_sum) AS td\n      FROM (SELECT t, status_code, duration_count, duration_sum FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, status_code, duration_count, duration_sum FROM hud_otel.endpoint_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, status_code, duration_count, duration_sum FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)) GROUP BY code HAVING tn > 0)\nORDER BY Count DESC"
+          }
+        },
+        {
+          "id": "tf1a9c0e5b7",
+          "x": 0,
+          "y": 42,
+          "w": 24,
+          "h": 6,
+          "name": "By feature flag",
+          "config": {
+            "configType": "sql",
+            "displayType": "table",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "WITH (q, buckets) -> if(empty(buckets), nan,\n  arrayFirst((v, c) -> c >= q * arrayCumSum(mapValues(buckets))[-1],\n    arrayMap((k, n, c) -> exp2((k + 1 - (c - q * arrayCumSum(mapValues(buckets))[-1]) / n) / 4),\n      mapKeys(buckets), mapValues(buckets), arrayCumSum(mapValues(buckets))),\n    arrayCumSum(mapValues(buckets)))) AS hud_duration_quantile\nSELECT multiIf(ff = '', 'no flags', ff = '__hud_other__', 'other combinations', ff) AS `Feature flags`, round(tn) AS Runs,\n    round(100 * tn / sum(tn) OVER (), 1) AS `Distribution %`, round(100 * (te + tio) / tn, 1) AS `Err Rate (%)`,\n    round(1000 * td / tn, 1) AS `Avg ms`, round(1e3 * hud_duration_quantile(0.9, tb), 1) AS `P90 ms`, round(ti) AS Issues\nFROM (SELECT feature_flags AS ff, sum(runs) AS tn, sum(errors) AS te, sumIf(issues, flow_type != 'http') AS tio,\n          sum(issues) AS ti, sum(dur) AS td, sumMap(bk) AS tb\n      FROM (SELECT t, flow_type, feature_flags, duration_count AS runs, if(startsWith(status_code, '5'), duration_count, 0) AS errors, 0 AS issues, duration_sum AS dur, buckets AS bk FROM hud_otel.endpoint_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT t, flow_type, feature_flags, 0 AS runs, 0 AS errors, issues, 0 AS dur, map() AS bk FROM hud_otel.endpoint_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, flow_type, feature_flags, duration_count AS runs, if(startsWith(status_code, '5'), duration_count, 0) AS errors, issues, duration_sum AS dur, buckets AS bk FROM hud_otel.endpoint_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, flow_type, feature_flags, duration_count AS runs, if(startsWith(status_code, '5'), duration_count, 0) AS errors, issues, duration_sum AS dur, buckets AS bk FROM hud_otel.endpoint_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint))\n      GROUP BY ff HAVING tn > 0)\nORDER BY Runs DESC"
+          }
+        },
+        {
+          "id": "taaa4ccc34b",
+          "x": 0,
+          "y": 48,
+          "w": 24,
+          "h": 13,
+          "name": "Functions in this flow, by Dur Total (click one for its page)",
+          "config": {
+            "configType": "sql",
+            "displayType": "table",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "WITH (q, buckets) -> if(empty(buckets), nan,\n  arrayFirst((v, c) -> c >= q * arrayCumSum(mapValues(buckets))[-1],\n    arrayMap((k, n, c) -> exp2((k + 1 - (c - q * arrayCumSum(mapValues(buckets))[-1]) / n) / 4),\n      mapKeys(buckets), mapValues(buckets), arrayCumSum(mapValues(buckets))),\n    arrayCumSum(mapValues(buckets)))) AS hud_duration_quantile\nSELECT function AS Function, round(runs) AS Runs, round(runs * 24 / greatest(intDiv({endDateMilliseconds:Int64}, 3600000) - intDiv({startDateMilliseconds:Int64}, 3600000), 1)) AS `Runs/Day`, round(ifNull(100 * (cur - prev) / nullIf(prev, 0), 0), 1) AS `Runs vs prev week %`, round(100 * errs / runs, 1) AS `Err Rate %`, round(dur / 60, 2) AS `Dur Total (min)`, if(empty(bk), NULL, round(1000 * hud_duration_quantile(0.9, bk), 1)) AS `P90 ms`, if(cnt = 0, NULL, round(1000 * dur / cnt, 1)) AS `Avg ms`, if(empty(bk), NULL, round(1000 * hud_duration_quantile(1, bk), 1)) AS `P100 ms`, service AS Service, flow AS Flow, ${env:sqlstring} AS Env\nFROM (SELECT service, flow, function, sum(calls) AS runs, sum(errors) AS errs, sum(duration_sum) AS dur, sum(duration_count) AS cnt, sumMap(buckets) AS bk\n      FROM (SELECT t, service, flow, function, 0 AS calls, 0 AS errors, duration_sum, duration_count, buckets FROM hud_otel.function_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT t, service, flow, function, calls, errors, 0 AS duration_sum, 0 AS duration_count, CAST(map(), 'Map(Int16, UInt64)') AS buckets FROM hud_otel.function_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, service, flow, function, calls, errors, duration_sum, duration_count, buckets FROM hud_otel.function_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)\n  UNION ALL SELECT hour AS t, service, flow, function, calls, errors, duration_sum, duration_count, buckets FROM hud_otel.function_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)) GROUP BY service, flow, function) AS m\nLEFT JOIN (SELECT service, flow, function, sum(calls) AS cur FROM (SELECT service, flow, function, calls FROM hud_otel.function_metrics_lean_1h WHERE hour + INTERVAL 1 HOUR > $__fromTime AND hour + INTERVAL 1 HOUR <= $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)) GROUP BY service, flow, function) AS c USING (service, flow, function)\nLEFT JOIN (SELECT service, flow, function, sum(calls) AS prev FROM (SELECT service, flow, function, calls FROM hud_otel.function_metrics_lean_1h WHERE hour + INTERVAL 1 HOUR > $__fromTime - INTERVAL 1 WEEK AND hour + INTERVAL 1 HOUR <= $__toTime - INTERVAL 1 WEEK AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $endpoint)) GROUP BY service, flow, function) AS p USING (service, flow, function)\nWHERE runs > 0\nORDER BY dur DESC\nLIMIT 500",
+            "onClick": {
+              "type": "dashboard",
+              "target": {
+                "mode": "id",
+                "id": "6afc5a0000000000000000a4"
+              },
+              "filters": [
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "service",
+                  "template": "{{Service}}"
+                },
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "function",
+                  "template": "{{Function}}"
+                },
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "flow",
+                  "template": "{{Flow}}"
+                },
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "env",
+                  "template": "{{Env}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "t84a91fc42b",
+          "x": 0,
+          "y": 61,
+          "w": 24,
+          "h": 13,
+          "name": "Forensics (full JSON): expand a row",
+          "config": {
+            "configType": "sql",
+            "displayType": "table",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT Timestamp AS time, ServiceName AS serviceName, LogAttributes['hud.forensic.type'] AS `hud.forensic.type`, LogAttributes['code.flow.name'] AS `code.flow.name`, Body AS body FROM hud_otel.otel_logs WHERE Timestamp >= fromUnixTimestamp64Milli({startDateMilliseconds:Int64}) AND Timestamp < fromUnixTimestamp64Milli({endDateMilliseconds:Int64}) AND EventName = 'hud.forensic' AND $__filter(ResourceAttributes['deployment.environment.name'], $env) AND $__filter(ServiceName, $service) AND $__filter(LogAttributes['code.flow.name'], $endpoint) ORDER BY Timestamp DESC LIMIT 200"
+          }
+        }
+      ],
+      "tags": [
+        "hud"
+      ],
+      "savedQuery": null,
+      "savedQueryLanguage": null,
+      "savedFilterValues": [
+        {
+          "type": "sql",
+          "condition": "env IN ('production')"
+        }
+      ],
+      "filters": [
+        {
+          "id": "f-env",
+          "type": "QUERY_EXPRESSION",
+          "name": "Environment",
+          "variableName": "env",
+          "expression": "env",
+          "where": "flow = '') OR (flow = ''",
+          "whereLanguage": "sql",
+          "isBroadcastEnabled": true,
+          "isVariableEnabled": true,
+          "sourceId": "6afc5a0000000000000000b1",
+          "maxSelections": 1,
+          "minSelections": 1
+        },
+        {
+          "id": "f-service",
+          "type": "QUERY_EXPRESSION",
+          "name": "Service",
+          "variableName": "service",
+          "expression": "service",
+          "where": "flow = '' AND $__filter(env, $env)) OR (flow = '' AND $__filter(env, $env)",
+          "whereLanguage": "sql",
+          "isBroadcastEnabled": true,
+          "isVariableEnabled": true,
+          "sourceId": "6afc5a0000000000000000b1"
+        },
+        {
+          "id": "f-flow",
+          "type": "QUERY_EXPRESSION",
+          "name": "Flow",
+          "variableName": "endpoint",
+          "expression": "flow",
+          "where": "flow != '' AND $__filter(env, $env) AND $__filter(service, $service)) OR (flow != '' AND $__filter(env, $env) AND $__filter(service, $service)",
+          "whereLanguage": "sql",
+          "isBroadcastEnabled": true,
+          "isVariableEnabled": true,
+          "sourceId": "6afc5a0000000000000000b1"
+        }
+      ]
+    },
+    {
+      "id": "6afc5a0000000000000000a4",
+      "name": "Hud: 4. Function",
+      "tiles": [
+        {
+          "id": "tc73ac01861",
+          "x": 0,
+          "y": 0,
+          "w": 4,
+          "h": 3,
+          "name": "Runs",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT round(runs) AS `Runs` FROM (SELECT sum(calls) AS runs, sum(errors) AS errs, sum(duration_sum) AS dur, sum(duration_count) AS cnt,\n    sumMap(buckets) AS bk\nFROM (SELECT t, 0 AS calls, 0 AS errors, duration_sum, duration_count, buckets FROM hud_otel.function_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT t, calls, errors, 0 AS duration_sum, 0 AS duration_count, CAST(map(), 'Map(Int16, UInt64)') AS buckets FROM hud_otel.function_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT hour AS t, calls, errors, duration_sum, duration_count, buckets FROM hud_otel.function_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT hour AS t, calls, errors, duration_sum, duration_count, buckets FROM hud_otel.function_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)))",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 0,
+              "thousandSeparated": true
+            }
+          }
+        },
+        {
+          "id": "td8c76f5dba",
+          "x": 4,
+          "y": 0,
+          "w": 4,
+          "h": 3,
+          "name": "Runs/Day",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT round(runs * 86400 / greatest(dateDiff('second', $__fromTime, $__toTime), 1)) AS `Runs/Day` FROM (SELECT sum(calls) AS runs, sum(errors) AS errs, sum(duration_sum) AS dur, sum(duration_count) AS cnt,\n    sumMap(buckets) AS bk\nFROM (SELECT t, 0 AS calls, 0 AS errors, duration_sum, duration_count, buckets FROM hud_otel.function_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT t, calls, errors, 0 AS duration_sum, 0 AS duration_count, CAST(map(), 'Map(Int16, UInt64)') AS buckets FROM hud_otel.function_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT hour AS t, calls, errors, duration_sum, duration_count, buckets FROM hud_otel.function_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT hour AS t, calls, errors, duration_sum, duration_count, buckets FROM hud_otel.function_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)))",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 0,
+              "thousandSeparated": true
+            }
+          }
+        },
+        {
+          "id": "tc32b6b29d5",
+          "x": 8,
+          "y": 0,
+          "w": 4,
+          "h": 3,
+          "name": "Runs vs prev week (%)",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT ifNull(round(100 * ((SELECT v FROM (SELECT sum(calls) AS v FROM hud_otel.function_metrics_lean_1h WHERE hour + INTERVAL 1 HOUR > $__fromTime AND hour + INTERVAL 1 HOUR <= $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow))) - (SELECT v FROM (SELECT sum(calls) AS v FROM hud_otel.function_metrics_lean_1h WHERE hour + INTERVAL 1 HOUR > $__fromTime - INTERVAL 1 WEEK AND hour + INTERVAL 1 HOUR <= $__toTime - INTERVAL 1 WEEK AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)))) / nullIf((SELECT v FROM (SELECT sum(calls) AS v FROM hud_otel.function_metrics_lean_1h WHERE hour + INTERVAL 1 HOUR > $__fromTime - INTERVAL 1 WEEK AND hour + INTERVAL 1 HOUR <= $__toTime - INTERVAL 1 WEEK AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow))), 0), 1), 0) AS `Runs vs prev week`",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 1,
+              "thousandSeparated": true
+            }
+          },
+          "description": "Runs in the complete hours of the range against the same hours a week earlier."
+        },
+        {
+          "id": "ta9993103d3",
+          "x": 12,
+          "y": 0,
+          "w": 4,
+          "h": 3,
+          "name": "Err Rate (%)",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT round(100 * errs / runs, 1) AS `Err Rate` FROM (SELECT sum(calls) AS runs, sum(errors) AS errs, sum(duration_sum) AS dur, sum(duration_count) AS cnt,\n    sumMap(buckets) AS bk\nFROM (SELECT t, 0 AS calls, 0 AS errors, duration_sum, duration_count, buckets FROM hud_otel.function_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT t, calls, errors, 0 AS duration_sum, 0 AS duration_count, CAST(map(), 'Map(Int16, UInt64)') AS buckets FROM hud_otel.function_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT hour AS t, calls, errors, duration_sum, duration_count, buckets FROM hud_otel.function_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT hour AS t, calls, errors, duration_sum, duration_count, buckets FROM hud_otel.function_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)))",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 1,
+              "thousandSeparated": true
+            }
+          }
+        },
+        {
+          "id": "tab64438842",
+          "x": 16,
+          "y": 0,
+          "w": 8,
+          "h": 16,
+          "name": "Errors (by type)",
+          "config": {
+            "configType": "sql",
+            "displayType": "table",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT error_type AS Error, round(n) AS Count, round(n * 86400 / greatest(dateDiff('second', $__fromTime, $__toTime), 1)) AS `Count/Day`,\n    round(ifNull(100 * (cur - prev) / nullIf(prev, 0), 0), 1) AS `Count vs prev %`\nFROM (SELECT error_type, sum(errors) AS n FROM (SELECT t, error_type, errors FROM hud_otel.function_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT hour AS t, error_type, errors FROM hud_otel.function_metrics_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT hour AS t, error_type, errors FROM hud_otel.function_metrics_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)) GROUP BY error_type) AS m\nLEFT JOIN (SELECT error_type, sum(errors) AS cur FROM (SELECT error_type, errors FROM hud_otel.function_metrics_1h WHERE hour + INTERVAL 1 HOUR > $__fromTime AND hour + INTERVAL 1 HOUR <= $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)) GROUP BY error_type) AS c USING (error_type)\nLEFT JOIN (SELECT error_type, sum(errors) AS prev FROM (SELECT error_type, errors FROM hud_otel.function_metrics_1h WHERE hour + INTERVAL 1 HOUR > $__fromTime - INTERVAL 1 WEEK AND hour + INTERVAL 1 HOUR <= $__toTime - INTERVAL 1 WEEK AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)) GROUP BY error_type) AS p USING (error_type)\nWHERE n > 0 AND error_type != '' ORDER BY Count DESC"
+          },
+          "description": "Count vs prev compares the complete hours of the range with the same hours a week earlier."
+        },
+        {
+          "id": "tedd52f11ef",
+          "x": 0,
+          "y": 3,
+          "w": 4,
+          "h": 3,
+          "name": "Avg",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT round(1e3 * dur / cnt, 2) AS `Avg` FROM (SELECT sum(calls) AS runs, sum(errors) AS errs, sum(duration_sum) AS dur, sum(duration_count) AS cnt,\n    sumMap(buckets) AS bk\nFROM (SELECT t, 0 AS calls, 0 AS errors, duration_sum, duration_count, buckets FROM hud_otel.function_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT t, calls, errors, 0 AS duration_sum, 0 AS duration_count, CAST(map(), 'Map(Int16, UInt64)') AS buckets FROM hud_otel.function_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT hour AS t, calls, errors, duration_sum, duration_count, buckets FROM hud_otel.function_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT hour AS t, calls, errors, duration_sum, duration_count, buckets FROM hud_otel.function_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)))",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 2,
+              "unit": "ms"
+            }
+          }
+        },
+        {
+          "id": "t55d897a049",
+          "x": 4,
+          "y": 3,
+          "w": 4,
+          "h": 3,
+          "name": "P90",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "WITH (q, buckets) -> if(empty(buckets), nan,\n  arrayFirst((v, c) -> c >= q * arrayCumSum(mapValues(buckets))[-1],\n    arrayMap((k, n, c) -> exp2((k + 1 - (c - q * arrayCumSum(mapValues(buckets))[-1]) / n) / 4),\n      mapKeys(buckets), mapValues(buckets), arrayCumSum(mapValues(buckets))),\n    arrayCumSum(mapValues(buckets)))) AS hud_duration_quantile\nSELECT round(1e3 * hud_duration_quantile(0.9, bk), 1) AS `P90` FROM (SELECT sum(calls) AS runs, sum(errors) AS errs, sum(duration_sum) AS dur, sum(duration_count) AS cnt,\n    sumMap(buckets) AS bk\nFROM (SELECT t, 0 AS calls, 0 AS errors, duration_sum, duration_count, buckets FROM hud_otel.function_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT t, calls, errors, 0 AS duration_sum, 0 AS duration_count, CAST(map(), 'Map(Int16, UInt64)') AS buckets FROM hud_otel.function_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT hour AS t, calls, errors, duration_sum, duration_count, buckets FROM hud_otel.function_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT hour AS t, calls, errors, duration_sum, duration_count, buckets FROM hud_otel.function_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)))",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 2,
+              "unit": "ms"
+            }
+          }
+        },
+        {
+          "id": "t276bcdd0e6",
+          "x": 8,
+          "y": 3,
+          "w": 4,
+          "h": 3,
+          "name": "P100",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "WITH (q, buckets) -> if(empty(buckets), nan,\n  arrayFirst((v, c) -> c >= q * arrayCumSum(mapValues(buckets))[-1],\n    arrayMap((k, n, c) -> exp2((k + 1 - (c - q * arrayCumSum(mapValues(buckets))[-1]) / n) / 4),\n      mapKeys(buckets), mapValues(buckets), arrayCumSum(mapValues(buckets))),\n    arrayCumSum(mapValues(buckets)))) AS hud_duration_quantile\nSELECT round(1e3 * hud_duration_quantile(1, bk), 1) AS `P100` FROM (SELECT sum(calls) AS runs, sum(errors) AS errs, sum(duration_sum) AS dur, sum(duration_count) AS cnt,\n    sumMap(buckets) AS bk\nFROM (SELECT t, 0 AS calls, 0 AS errors, duration_sum, duration_count, buckets FROM hud_otel.function_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT t, calls, errors, 0 AS duration_sum, 0 AS duration_count, CAST(map(), 'Map(Int16, UInt64)') AS buckets FROM hud_otel.function_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT hour AS t, calls, errors, duration_sum, duration_count, buckets FROM hud_otel.function_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT hour AS t, calls, errors, duration_sum, duration_count, buckets FROM hud_otel.function_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)))",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 2,
+              "unit": "ms"
+            }
+          }
+        },
+        {
+          "id": "t4dc4e641d3",
+          "x": 12,
+          "y": 3,
+          "w": 4,
+          "h": 3,
+          "name": "Dur Total",
+          "config": {
+            "configType": "sql",
+            "displayType": "number",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT round(dur / 60, 2) AS `Dur Total` FROM (SELECT sum(calls) AS runs, sum(errors) AS errs, sum(duration_sum) AS dur, sum(duration_count) AS cnt,\n    sumMap(buckets) AS bk\nFROM (SELECT t, 0 AS calls, 0 AS errors, duration_sum, duration_count, buckets FROM hud_otel.function_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT t, calls, errors, 0 AS duration_sum, 0 AS duration_count, CAST(map(), 'Map(Int16, UInt64)') AS buckets FROM hud_otel.function_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT hour AS t, calls, errors, duration_sum, duration_count, buckets FROM hud_otel.function_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT hour AS t, calls, errors, duration_sum, duration_count, buckets FROM hud_otel.function_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)))",
+            "numberFormat": {
+              "output": "number",
+              "mantissa": 2,
+              "unit": "min"
+            }
+          }
+        },
+        {
+          "id": "t5af6b24978",
+          "x": 0,
+          "y": 6,
+          "w": 16,
+          "h": 5,
+          "name": "Runs/s",
+          "config": {
+            "configType": "sql",
+            "displayType": "line",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT toStartOfInterval(t, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AS ts, sum(calls) / greatest(1, dateDiff('second', ts, least(ts + toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600))), least(toStartOfInterval($__toTime - INTERVAL 1 SECOND, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, 1, 3600))) + toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, 1, 3600)), now())))) AS `Runs/s` FROM (SELECT t, calls FROM hud_otel.function_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT hour AS t, calls FROM hud_otel.function_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600) AND hour >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)) GROUP BY ts ORDER BY ts WITH FILL FROM toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) TO $__toTime STEP toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))",
+            "granularity": "auto",
+            "alignDateRangeToGranularity": true,
+            "fillNulls": false
+          }
+        },
+        {
+          "id": "tafac261bad",
+          "x": 0,
+          "y": 11,
+          "w": 16,
+          "h": 5,
+          "name": "Duration (ms): Avg / P50 / P90 / P99",
+          "config": {
+            "configType": "sql",
+            "displayType": "line",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "WITH (q, buckets) -> if(empty(buckets), nan,\n  arrayFirst((v, c) -> c >= q * arrayCumSum(mapValues(buckets))[-1],\n    arrayMap((k, n, c) -> exp2((k + 1 - (c - q * arrayCumSum(mapValues(buckets))[-1]) / n) / 4),\n      mapKeys(buckets), mapValues(buckets), arrayCumSum(mapValues(buckets))),\n    arrayCumSum(mapValues(buckets)))) AS hud_duration_quantile\nSELECT ts, 1e3 * dur / cnt AS Avg, 1e3 * hud_duration_quantile(0.5, bk) AS P50, 1e3 * hud_duration_quantile(0.9, bk) AS P90, 1e3 * hud_duration_quantile(0.99, bk) AS P99\nFROM (SELECT toStartOfInterval(t, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AS ts, sum(duration_sum) AS dur, sum(duration_count) AS cnt, sumMap(buckets) AS bk\n      FROM (SELECT t, duration_sum, duration_count, buckets FROM hud_otel.function_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT hour AS t, duration_sum, duration_count, buckets FROM hud_otel.function_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600) AND hour >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)) GROUP BY ts HAVING cnt > 0)\nORDER BY ts",
+            "granularity": "auto",
+            "alignDateRangeToGranularity": true,
+            "fillNulls": false
+          }
+        },
+        {
+          "id": "t9ecf2c1963",
+          "x": 0,
+          "y": 16,
+          "w": 24,
+          "h": 5,
+          "name": "Errors/s by type",
+          "config": {
+            "configType": "sql",
+            "displayType": "line",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT toStartOfInterval(t, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AS ts, error_type AS `Error type`, sum(errors) / greatest(1, dateDiff('second', ts, least(ts + toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600))), least(toStartOfInterval($__toTime - INTERVAL 1 SECOND, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, 1, 3600))) + toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, 1, 3600)), now())))) AS `Errors/s` FROM (SELECT t, error_type, errors FROM hud_otel.function_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow) AND error_type != ''\n  UNION ALL SELECT hour AS t, error_type, errors FROM hud_otel.function_metrics_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600) AND hour >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow) AND error_type != '')\nGROUP BY ts, `Error type` ORDER BY `Error type`, ts WITH FILL FROM toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) TO $__toTime STEP toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))",
+            "granularity": "auto",
+            "alignDateRangeToGranularity": true,
+            "fillNulls": false
+          }
+        },
+        {
+          "id": "tf650c1275b",
+          "x": 0,
+          "y": 21,
+          "w": 24,
+          "h": 5,
+          "name": "Runs/s by version (content hash)",
+          "config": {
+            "configType": "sql",
+            "displayType": "line",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT toStartOfInterval(t, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AS ts, content_hash AS Version, sum(calls) / greatest(1, dateDiff('second', ts, least(ts + toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600))), least(toStartOfInterval($__toTime - INTERVAL 1 SECOND, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, 1, 3600))) + toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, 1, 3600)), now())))) AS `Runs/s` FROM (SELECT t, content_hash, calls FROM hud_otel.function_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow) AND calls > 0\n  UNION ALL SELECT hour AS t, content_hash, calls FROM hud_otel.function_metrics_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600) AND hour >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow) AND calls > 0)\nGROUP BY ts, Version ORDER BY Version, ts WITH FILL FROM toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) TO $__toTime STEP toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))",
+            "granularity": "auto",
+            "alignDateRangeToGranularity": true,
+            "fillNulls": false
+          }
+        },
+        {
+          "id": "teb34ac7b42",
+          "x": 0,
+          "y": 26,
+          "w": 8,
+          "h": 5,
+          "name": "CPU (% of limit)",
+          "config": {
+            "configType": "sql",
+            "displayType": "line",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT toStartOfInterval(t, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AS ts, 100 * sum(cpu_sum) / nullIf(sum(cpu_count), 0) AS Avg, 100 * maxIf(cpu_max, cpu_count > 0) AS Max\nFROM (SELECT * EXCEPT t, t FROM hud_otel.process_metrics WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT * EXCEPT hour, hour AS t FROM hud_otel.process_metrics_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600) AND hour >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)) GROUP BY ts HAVING sum(cpu_count) > 0 ORDER BY ts",
+            "granularity": "auto",
+            "alignDateRangeToGranularity": true,
+            "fillNulls": false
+          }
+        },
+        {
+          "id": "tc4ee8932ff",
+          "x": 8,
+          "y": 26,
+          "w": 8,
+          "h": 5,
+          "name": "Event loop utilization (%)",
+          "config": {
+            "configType": "sql",
+            "displayType": "line",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT toStartOfInterval(t, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AS ts, 100 * sum(elu_sum) / nullIf(sum(elu_count), 0) AS Avg, 100 * maxIf(elu_max, elu_count > 0) AS Max\nFROM (SELECT * EXCEPT t, t FROM hud_otel.process_metrics WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT * EXCEPT hour, hour AS t FROM hud_otel.process_metrics_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600) AND hour >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)) GROUP BY ts HAVING sum(elu_count) > 0 ORDER BY ts",
+            "granularity": "auto",
+            "alignDateRangeToGranularity": true,
+            "fillNulls": false
+          }
+        },
+        {
+          "id": "t7a1f9a7e10",
+          "x": 16,
+          "y": 26,
+          "w": 8,
+          "h": 5,
+          "name": "Memory (% of limit)",
+          "config": {
+            "configType": "sql",
+            "displayType": "line",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT toStartOfInterval(t, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AS ts, 100 * (sum(memory_sum) / sum(memory_count)) / avgIf(memory_limit, memory_limit > 0) AS Avg,\n    100 * maxIf(memory_max, memory_count > 0) / avgIf(memory_limit, memory_limit > 0) AS Max\nFROM (SELECT * EXCEPT t, t FROM hud_otel.process_metrics WHERE $__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600 AND t >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND t < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)\n  UNION ALL SELECT * EXCEPT hour, hour AS t FROM hud_otel.process_metrics_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600) AND hour >= toStartOfInterval($__fromTime, toIntervalSecond(if($__fromTime >= now() - INTERVAL 30 DAY AND {intervalSeconds:Int64} < 3600, greatest({intervalSeconds:Int64}, 300), greatest({intervalSeconds:Int64}, 3600)))) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service)) GROUP BY ts HAVING sum(memory_count) > 0 ORDER BY ts",
+            "granularity": "auto",
+            "alignDateRangeToGranularity": true,
+            "fillNulls": false
+          }
+        },
+        {
+          "id": "t5d3506c400",
+          "x": 0,
+          "y": 31,
+          "w": 24,
+          "h": 13,
+          "name": "Forensics (click a Forensic id)",
+          "config": {
+            "configType": "sql",
+            "displayType": "table",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT Timestamp AS time, LogAttributes['code.flow.name'] AS Flow, LogAttributes['http.response.status_code'] AS Status, round(JSONExtractFloat(Body, 'duration') / 1e6, 1) AS `Duration ms`, JSONExtractString(Body, 'exceptions', 1, 'name') AS Exception, JSONExtractString(Body, 'exceptions', 1, 'executionFlow', 1, 'function', 'code.function.name') AS Function, JSONExtractString(Body, 'exceptions', 1, 'executionFlow', 1, 'caller', 'code.function.name') AS Caller, left(splitByChar('\\n', JSONExtractString(Body, 'exceptions', 1, 'message'))[1], 120) AS Message, LogAttributes['issue.fingerprint'] AS Forensic, ${env:sqlstring} AS Env FROM hud_otel.otel_logs WHERE Timestamp >= fromUnixTimestamp64Milli({startDateMilliseconds:Int64}) AND Timestamp < fromUnixTimestamp64Milli({endDateMilliseconds:Int64}) AND EventName = 'hud.forensic' AND $__filter(ResourceAttributes['deployment.environment.name'], $env) AND LogAttributes['hud.forensic.type'] = 'error' AND $__filter(ServiceName, $service) AND $__filter(LogAttributes['code.flow.name'], $flow) AND (JSONExtractString(Body, 'exceptions', 1, 'executionFlow', 1, 'function', 'code.function.name') != '' OR JSONExtractString(Body, 'exceptions', 1, 'executionFlow', 1, 'caller', 'code.function.name') != '') AND ($__filter(JSONExtractString(Body, 'exceptions', 1, 'executionFlow', 1, 'function', 'code.function.name'), $function) OR $__filter(JSONExtractString(Body, 'exceptions', 1, 'executionFlow', 1, 'caller', 'code.function.name'), $function)) ORDER BY Timestamp DESC LIMIT 200",
+            "onClick": {
+              "type": "dashboard",
+              "target": {
+                "mode": "id",
+                "id": "6afc5a0000000000000000a5"
+              },
+              "filters": [
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "LogAttributes['issue.fingerprint']",
+                  "template": "{{Forensic}}"
+                },
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "env",
+                  "template": "{{Env}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "t02e0f00dc3",
+          "x": 0,
+          "y": 44,
+          "w": 24,
+          "h": 6,
+          "name": "Called by (click one for its page)",
+          "config": {
+            "configType": "sql",
+            "displayType": "table",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "WITH (q, buckets) -> if(empty(buckets), nan,\n  arrayFirst((v, c) -> c >= q * arrayCumSum(mapValues(buckets))[-1],\n    arrayMap((k, n, c) -> exp2((k + 1 - (c - q * arrayCumSum(mapValues(buckets))[-1]) / n) / 4),\n      mapKeys(buckets), mapValues(buckets), arrayCumSum(mapValues(buckets))),\n    arrayCumSum(mapValues(buckets)))) AS hud_duration_quantile\nSELECT caller AS Function, round(runs) AS Runs, round(100 * errs / runs, 1) AS `Err Rate %`, round(dur / 60, 2) AS `Dur Total (min)`, if(cnt = 0, NULL, round(1000 * dur / cnt, 1)) AS `Avg ms`, if(empty(bk), NULL, round(1000 * hud_duration_quantile(0.9, bk), 1)) AS `P90 ms`, if(empty(bk), NULL, round(1000 * hud_duration_quantile(1, bk), 1)) AS `P100 ms`, service AS Service, ${env:sqlstring} AS Env\nFROM (SELECT service, caller, sum(calls) AS runs, sum(errors) AS errs, sum(duration_sum) AS dur, sum(duration_count) AS cnt, sumMap(buckets) AS bk\n      FROM (SELECT t, service, caller, 0 AS calls, 0 AS errors, duration_sum, duration_count, buckets FROM hud_otel.function_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow) AND caller != ''\n  UNION ALL SELECT t, service, caller, calls, errors, 0 AS duration_sum, 0 AS duration_count, CAST(map(), 'Map(Int16, UInt64)') AS buckets FROM hud_otel.function_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow) AND caller != ''\n  UNION ALL SELECT hour AS t, service, caller, calls, errors, duration_sum, duration_count, buckets FROM hud_otel.function_metrics_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow) AND caller != ''\n  UNION ALL SELECT hour AS t, service, caller, calls, errors, duration_sum, duration_count, buckets FROM hud_otel.function_metrics_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow) AND caller != '') GROUP BY service, caller) AS m\nWHERE runs > 0\nORDER BY dur DESC\nLIMIT 500",
+            "onClick": {
+              "type": "dashboard",
+              "target": {
+                "mode": "id",
+                "id": "6afc5a0000000000000000a4"
+              },
+              "filters": [
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "service",
+                  "template": "{{Service}}"
+                },
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "function",
+                  "template": "{{Function}}"
+                },
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "env",
+                  "template": "{{Env}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "t8e8c2f5e3f",
+          "x": 0,
+          "y": 50,
+          "w": 24,
+          "h": 8,
+          "name": "Calls (click one for its page)",
+          "config": {
+            "configType": "sql",
+            "displayType": "table",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "WITH (q, buckets) -> if(empty(buckets), nan,\n  arrayFirst((v, c) -> c >= q * arrayCumSum(mapValues(buckets))[-1],\n    arrayMap((k, n, c) -> exp2((k + 1 - (c - q * arrayCumSum(mapValues(buckets))[-1]) / n) / 4),\n      mapKeys(buckets), mapValues(buckets), arrayCumSum(mapValues(buckets))),\n    arrayCumSum(mapValues(buckets)))) AS hud_duration_quantile\nSELECT function AS Function, round(runs) AS Runs, round(100 * errs / runs, 1) AS `Err Rate %`, round(dur / 60, 2) AS `Dur Total (min)`, if(cnt = 0, NULL, round(1000 * dur / cnt, 1)) AS `Avg ms`, if(empty(bk), NULL, round(1000 * hud_duration_quantile(0.9, bk), 1)) AS `P90 ms`, if(empty(bk), NULL, round(1000 * hud_duration_quantile(1, bk), 1)) AS `P100 ms`, service AS Service, ${env:sqlstring} AS Env\nFROM (SELECT service, function, sum(calls) AS runs, sum(errors) AS errs, sum(duration_sum) AS dur, sum(duration_count) AS cnt, sumMap(buckets) AS bk\n      FROM (SELECT t, service, function, 0 AS calls, 0 AS errors, duration_sum, duration_count, buckets FROM hud_otel.function_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(caller, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT t, service, function, calls, errors, 0 AS duration_sum, 0 AS duration_count, CAST(map(), 'Map(Int16, UInt64)') AS buckets FROM hud_otel.function_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(caller, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT hour AS t, service, function, calls, errors, duration_sum, duration_count, buckets FROM hud_otel.function_metrics_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(caller, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT hour AS t, service, function, calls, errors, duration_sum, duration_count, buckets FROM hud_otel.function_metrics_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(caller, $function) AND $__filter(flow, $flow)) GROUP BY service, function) AS m\nWHERE runs > 0\nORDER BY dur DESC\nLIMIT 500",
+            "onClick": {
+              "type": "dashboard",
+              "target": {
+                "mode": "id",
+                "id": "6afc5a0000000000000000a4"
+              },
+              "filters": [
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "service",
+                  "template": "{{Service}}"
+                },
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "function",
+                  "template": "{{Function}}"
+                },
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "env",
+                  "template": "{{Env}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "t2c89d326ea",
+          "x": 0,
+          "y": 58,
+          "w": 24,
+          "h": 6,
+          "name": "Flows this function runs in (click one for its page)",
+          "config": {
+            "configType": "sql",
+            "displayType": "table",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT flow AS Flow, round(runs) AS Runs, round(100 * errs / runs, 1) AS `Err Rate %`, round(dur / 60, 2) AS `Dur Total (min)`, if(cnt = 0, NULL, round(1000 * dur / cnt, 1)) AS `Avg ms`, service AS Service, ${env:sqlstring} AS Env\nFROM (SELECT service, flow, sum(calls) AS runs, sum(errors) AS errs, sum(duration_sum) AS dur, sum(duration_count) AS cnt\n      FROM (SELECT t, service, flow, 0 AS calls, 0 AS errors, duration_sum, duration_count FROM hud_otel.function_durations WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT t, service, flow, calls, errors, 0 AS duration_sum, 0 AS duration_count FROM hud_otel.function_counters WHERE $__fromTime >= now() - INTERVAL 30 DAY AND t >= $__fromTime AND t < $__toTime AND (t < toStartOfHour($__fromTime) + INTERVAL 1 HOUR OR (toStartOfHour($__toTime) > toStartOfHour($__fromTime) AND t >= toStartOfHour($__toTime))) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT hour AS t, service, flow, calls, errors, duration_sum, duration_count FROM hud_otel.function_metrics_lean_1h WHERE $__fromTime >= now() - INTERVAL 30 DAY AND hour >= toStartOfHour($__fromTime) + INTERVAL 1 HOUR AND hour < toStartOfHour($__toTime) AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)\n  UNION ALL SELECT hour AS t, service, flow, calls, errors, duration_sum, duration_count FROM hud_otel.function_metrics_lean_1h WHERE NOT ($__fromTime >= now() - INTERVAL 30 DAY) AND hour >= toStartOfHour($__fromTime) AND hour < $__toTime AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(function, $function) AND $__filter(flow, $flow)) GROUP BY service, flow) AS m\nWHERE runs > 0\nORDER BY dur DESC\nLIMIT 500",
+            "onClick": {
+              "type": "dashboard",
+              "target": {
+                "mode": "id",
+                "id": "6afc5a0000000000000000a3"
+              },
+              "filters": [
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "service",
+                  "template": "{{Service}}"
+                },
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "flow",
+                  "template": "{{Flow}}"
+                },
+                {
+                  "kind": "expressionTemplate",
+                  "expression": "env",
+                  "template": "{{Env}}"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "tags": [
+        "hud"
+      ],
+      "savedQuery": null,
+      "savedQueryLanguage": null,
+      "savedFilterValues": [
+        {
+          "type": "sql",
+          "condition": "env IN ('production')"
+        }
+      ],
+      "filters": [
+        {
+          "id": "f-env",
+          "type": "QUERY_EXPRESSION",
+          "name": "Environment",
+          "variableName": "env",
+          "expression": "env",
+          "where": "flow = '') OR (flow = ''",
+          "whereLanguage": "sql",
+          "isBroadcastEnabled": true,
+          "isVariableEnabled": true,
+          "sourceId": "6afc5a0000000000000000b1",
+          "maxSelections": 1,
+          "minSelections": 1
+        },
+        {
+          "id": "f-service",
+          "type": "QUERY_EXPRESSION",
+          "name": "Service",
+          "variableName": "service",
+          "expression": "service",
+          "where": "flow = '' AND $__filter(env, $env)) OR (flow = '' AND $__filter(env, $env)",
+          "whereLanguage": "sql",
+          "isBroadcastEnabled": true,
+          "isVariableEnabled": true,
+          "sourceId": "6afc5a0000000000000000b1"
+        },
+        {
+          "id": "f-flow",
+          "type": "QUERY_EXPRESSION",
+          "name": "Flow",
+          "variableName": "flow",
+          "expression": "flow",
+          "where": "flow != '' AND $__filter(env, $env) AND $__filter(service, $service)) OR (flow != '' AND $__filter(env, $env) AND $__filter(service, $service)",
+          "whereLanguage": "sql",
+          "isBroadcastEnabled": true,
+          "isVariableEnabled": true,
+          "sourceId": "6afc5a0000000000000000b2"
+        },
+        {
+          "id": "f-function",
+          "type": "QUERY_EXPRESSION",
+          "name": "Function",
+          "variableName": "function",
+          "expression": "function",
+          "where": "function != '' AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $flow)) OR (function != '' AND $__filter(env, $env) AND $__filter(service, $service) AND $__filter(flow, $flow)",
+          "whereLanguage": "sql",
+          "isBroadcastEnabled": true,
+          "isVariableEnabled": true,
+          "sourceId": "6afc5a0000000000000000b2"
+        }
+      ]
+    },
+    {
+      "id": "6afc5a0000000000000000a5",
+      "name": "Hud: 5. Forensic Details",
+      "tiles": [
+        {
+          "id": "tfb4bc9e49a",
+          "x": 0,
+          "y": 0,
+          "w": 24,
+          "h": 5,
+          "name": "Forensic — latest for the Fingerprint, last 7 days whatever the time range (the forensic column holds the full JSON)",
+          "config": {
+            "configType": "sql",
+            "displayType": "table",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT Timestamp AS time, ServiceName AS Service, LogAttributes['hud.forensic.type'] AS Trigger, LogAttributes['code.flow.name'] AS Flow, LogAttributes['http.response.status_code'] AS Status, round(JSONExtractFloat(Body, 'duration') / 1e6, 1) AS `Duration ms`, LogAttributes['issue.fingerprint'] AS Fingerprint, TraceId AS traceId, Body AS forensic FROM hud_otel.otel_logs WHERE Timestamp >= now() - INTERVAL 7 DAY AND EventName = 'hud.forensic' AND $__filter(ResourceAttributes['deployment.environment.name'], $env) AND $__filter(LogAttributes['issue.fingerprint'], $investigation) ORDER BY Timestamp DESC LIMIT 1"
+          }
+        },
+        {
+          "id": "t0695074193",
+          "x": 0,
+          "y": 5,
+          "w": 24,
+          "h": 19,
+          "name": "Forensic fields (every top-level field)",
+          "config": {
+            "configType": "sql",
+            "displayType": "table",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT kv.1 AS Field, kv.2 AS Value FROM (SELECT Body FROM hud_otel.otel_logs WHERE Timestamp >= now() - INTERVAL 7 DAY AND EventName = 'hud.forensic' AND $__filter(ResourceAttributes['deployment.environment.name'], $env) AND $__filter(LogAttributes['issue.fingerprint'], $investigation) ORDER BY Timestamp DESC LIMIT 1) ARRAY JOIN JSONExtractKeysAndValuesRaw(Body) AS kv"
+          }
+        }
+      ],
+      "tags": [
+        "hud"
+      ],
+      "savedQuery": null,
+      "savedQueryLanguage": null,
+      "savedFilterValues": [
+        {
+          "type": "sql",
+          "condition": "env IN ('production')"
+        }
+      ],
+      "filters": [
+        {
+          "id": "f-env",
+          "type": "QUERY_EXPRESSION",
+          "name": "Environment",
+          "variableName": "env",
+          "expression": "env",
+          "where": "flow = '') OR (flow = ''",
+          "whereLanguage": "sql",
+          "isBroadcastEnabled": true,
+          "isVariableEnabled": true,
+          "sourceId": "6afc5a0000000000000000b1",
+          "maxSelections": 1,
+          "minSelections": 1
+        },
+        {
+          "id": "f-fingerprint",
+          "name": "Fingerprint",
+          "variableName": "investigation",
+          "type": "QUERY_EXPRESSION",
+          "expression": "LogAttributes['issue.fingerprint']",
+          "where": "LogAttributes['issue.fingerprint'] != '' AND $__filter(ResourceAttributes['deployment.environment.name'], $env)",
+          "whereLanguage": "sql",
+          "isBroadcastEnabled": true,
+          "isVariableEnabled": true,
+          "sourceId": "6af4960727939662854d75df"
+        }
+      ]
+    }
+  ]
+}

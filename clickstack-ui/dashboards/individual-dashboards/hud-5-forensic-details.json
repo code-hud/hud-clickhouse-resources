@@ -1,0 +1,126 @@
+{
+  "format": "hud-clickstack-dashboards/v1",
+  "exported_from": {
+    "base_url": "http://localhost:8080",
+    "sources": [
+      {
+        "id": "6af4960727939662854d75df",
+        "name": "Hud investigations",
+        "kind": "log",
+        "database": "hud_otel",
+        "table": "otel_logs"
+      },
+      {
+        "id": "6afc5a0000000000000000b1",
+        "name": "Hud endpoints",
+        "kind": "log",
+        "database": "hud_otel",
+        "table": "endpoints",
+        "role": "labels",
+        "spec": {
+          "kind": "log",
+          "timestampValueExpression": "now64(3) - INTERVAL 1 MINUTE",
+          "defaultTableSelectExpression": "env, service, flow",
+          "bodyExpression": "flow",
+          "implicitColumnExpression": "flow"
+        }
+      },
+      {
+        "id": "6afc5a0000000000000000b2",
+        "name": "Hud functions",
+        "kind": "log",
+        "database": "hud_otel",
+        "table": "functions",
+        "role": "labels",
+        "spec": {
+          "kind": "log",
+          "timestampValueExpression": "now64(3) - INTERVAL 1 MINUTE",
+          "defaultTableSelectExpression": "env, service, flow, function",
+          "bodyExpression": "function",
+          "implicitColumnExpression": "function"
+        }
+      }
+    ],
+    "connections": [
+      {
+        "id": "6af4960727939662854d75db",
+        "name": "Hud ClickHouse"
+      }
+    ]
+  },
+  "dashboards": [
+    {
+      "id": "6afc5a0000000000000000a5",
+      "name": "Hud: 5. Forensic Details",
+      "tiles": [
+        {
+          "id": "tfb4bc9e49a",
+          "x": 0,
+          "y": 0,
+          "w": 24,
+          "h": 5,
+          "name": "Forensic — latest for the Fingerprint, last 7 days whatever the time range (the forensic column holds the full JSON)",
+          "config": {
+            "configType": "sql",
+            "displayType": "table",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT Timestamp AS time, ServiceName AS Service, LogAttributes['hud.forensic.type'] AS Trigger, LogAttributes['code.flow.name'] AS Flow, LogAttributes['http.response.status_code'] AS Status, round(JSONExtractFloat(Body, 'duration') / 1e6, 1) AS `Duration ms`, LogAttributes['issue.fingerprint'] AS Fingerprint, TraceId AS traceId, Body AS forensic FROM hud_otel.otel_logs WHERE Timestamp >= now() - INTERVAL 7 DAY AND EventName = 'hud.forensic' AND $__filter(ResourceAttributes['deployment.environment.name'], $env) AND $__filter(LogAttributes['issue.fingerprint'], $investigation) ORDER BY Timestamp DESC LIMIT 1"
+          }
+        },
+        {
+          "id": "t0695074193",
+          "x": 0,
+          "y": 5,
+          "w": 24,
+          "h": 19,
+          "name": "Forensic fields (every top-level field)",
+          "config": {
+            "configType": "sql",
+            "displayType": "table",
+            "connectionId": "6af4960727939662854d75db",
+            "sqlTemplate": "SELECT kv.1 AS Field, kv.2 AS Value FROM (SELECT Body FROM hud_otel.otel_logs WHERE Timestamp >= now() - INTERVAL 7 DAY AND EventName = 'hud.forensic' AND $__filter(ResourceAttributes['deployment.environment.name'], $env) AND $__filter(LogAttributes['issue.fingerprint'], $investigation) ORDER BY Timestamp DESC LIMIT 1) ARRAY JOIN JSONExtractKeysAndValuesRaw(Body) AS kv"
+          }
+        }
+      ],
+      "tags": [
+        "hud"
+      ],
+      "savedQuery": null,
+      "savedQueryLanguage": null,
+      "savedFilterValues": [
+        {
+          "type": "sql",
+          "condition": "env IN ('production')"
+        }
+      ],
+      "filters": [
+        {
+          "id": "f-env",
+          "type": "QUERY_EXPRESSION",
+          "name": "Environment",
+          "variableName": "env",
+          "expression": "env",
+          "where": "flow = '') OR (flow = ''",
+          "whereLanguage": "sql",
+          "isBroadcastEnabled": true,
+          "isVariableEnabled": true,
+          "sourceId": "6afc5a0000000000000000b1",
+          "maxSelections": 1,
+          "minSelections": 1
+        },
+        {
+          "id": "f-fingerprint",
+          "name": "Fingerprint",
+          "variableName": "investigation",
+          "type": "QUERY_EXPRESSION",
+          "expression": "LogAttributes['issue.fingerprint']",
+          "where": "LogAttributes['issue.fingerprint'] != '' AND $__filter(ResourceAttributes['deployment.environment.name'], $env)",
+          "whereLanguage": "sql",
+          "isBroadcastEnabled": true,
+          "isVariableEnabled": true,
+          "sourceId": "6af4960727939662854d75df"
+        }
+      ]
+    }
+  ]
+}
