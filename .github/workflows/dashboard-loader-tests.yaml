@@ -3,12 +3,14 @@ name: dashboard-loader-tests
 # Runs clickstack-ui/tests against the dashboards in clickstack-ui/dashboards/ on the oldest Python the loader
 # supports (3.10, see clickstack-ui/README.md) and the newest (3.14). Each runs in the official python image, since the
 # runner OS doesn't ship every Python version. Standard library only: nothing to install.
+# Runs on every pull request, without a paths filter, so its jobs can be required checks on main (a filtered
+# workflow never reports on PRs outside its paths, and the PR would wait for it forever). workflow_dispatch
+# adds a "Run workflow" button on the Actions page.
 on:
   pull_request:
-    paths: ["clickstack-ui/**", ".github/workflows/dashboard-loader-tests.yaml"]
   push:
     branches: [main]
-    paths: ["clickstack-ui/**", ".github/workflows/dashboard-loader-tests.yaml"]
+  workflow_dispatch:
 
 permissions:
   contents: read
