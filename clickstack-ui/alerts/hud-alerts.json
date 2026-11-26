@@ -1,0 +1,283 @@
+{
+  "format": "hud-clickstack-alerts/v2",
+  "database": "hud_otel",
+  "alerts": [
+    {
+      "name": "HudFlowErrors",
+      "install": true,
+      "interval": "5m",
+      "threshold": 0.01,
+      "thresholdType": "above",
+      "severity": "warning",
+      "tags": [
+        "warning"
+      ],
+      "summary": "Hud-style errors on {{attributes.job}} {{attributes.code_flow_name}}",
+      "description": "Error {{attributes.issue_fingerprint}} rate {{value}} over [now-20m, now-10m] (>=1 error, >=1%).",
+      "note": "Both OpenSearch HudFlowErrors rules (non-SQS and SQS) are this one alert: an SQS flow divides by its messages, every other flow by its runs. HTTP 4xx are excluded. Value is the error rate; there is no row below 1 error or 1%.",
+      "gaps": [
+        "An issue row has no status code column: 4xx is told from framework_result, and the method and path come from the flow's runs."
+      ],
+      "columns": [
+        [
+          "job",
+          "service"
+        ],
+        [
+          "deployment_environment_name",
+          "env"
+        ],
+        [
+          "code_flow_type",
+          "flow_type"
+        ],
+        [
+          "code_flow_name",
+          "flow"
+        ],
+        [
+          "endpoint_method",
+          "method"
+        ],
+        [
+          "endpoint_path",
+          "if(route = '', flow, route)"
+        ],
+        [
+          "issue_fingerprint",
+          "fingerprint"
+        ]
+      ],
+      "sql": "SELECT\n  toDateTime(toStartOfInterval(fromUnixTimestamp64Milli({startDateMilliseconds:Int64}), INTERVAL {intervalSeconds:Int64} SECOND), 'UTC') AS ts,\n  service AS job,\n  env AS deployment_environment_name,\n  flow_type AS code_flow_type,\n  flow AS code_flow_name,\n  method AS endpoint_method,\n  if(route = '', flow, route) AS endpoint_path,\n  fingerprint AS issue_fingerprint,\n  errors / runs AS value\nFROM (\n  SELECT env, service, flow_type, flow, fingerprint,\n    sumIf(issues, NOT match(framework_result, '^4..$')) AS errors,\n    sum(sum(if(flow_type = 'sqs', messages, toFloat64(calls)))) OVER flow_rows AS runs,\n    max(max(method)) OVER flow_rows AS method, max(max(route)) OVER flow_rows AS route\n  FROM hud_otel.endpoint_metrics_union\n  WHERE t > toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC') - INTERVAL 20 MINUTE AND t <= toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC') - INTERVAL 10 MINUTE\n  GROUP BY env, service, flow_type, flow, fingerprint\n  WINDOW flow_rows AS (PARTITION BY env, service, flow_type, flow)\n)\nWHERE errors >= 1\n  AND runs > 0\n  AND errors / runs >= 0.01\n"
+    },
+    {
+      "name": "HudWeekOverWeekDegradation",
+      "install": true,
+      "interval": "1h",
+      "threshold": 1.7,
+      "thresholdType": "above",
+      "severity": "warning",
+      "tags": [
+        "warning"
+      ],
+      "summary": "Hud-style week-over-week p90 degradation on {{attributes.job}} {{attributes.code_flow_name}}",
+      "description": "Average hourly p90 over the last 7d is {{value}}x the previous 7d (alert at >= 1.7x, >= 350 invocations per week, >= 84 hourly buckets, p90 >= 150ms).",
+      "note": "Same gates as the OpenSearch rule: hourly p90 ratio, bucket counts, sd/avg, non-overlapping 99% intervals, window p90 and invocation counts. Evaluated every hour over 14 days of the hourly table.",
+      "gaps": [
+        "Percentiles come from the SDK's exponential buckets through hud_duration_quantile, not the AMP native histogram and not Hud's DDSketch.",
+        "Reads complete hours of the hourly tables, by the hour an SDK export ends in: the hour in progress is not counted.",
+        "No per-entity overrides, exclusion lists, session tags, or issue lifecycle."
+      ],
+      "columns": [
+        [
+          "job",
+          "service"
+        ],
+        [
+          "deployment_environment_name",
+          "env"
+        ],
+        [
+          "code_flow_type",
+          "flow_type"
+        ],
+        [
+          "code_flow_name",
+          "flow"
+        ],
+        [
+          "endpoint_method",
+          "method"
+        ],
+        [
+          "endpoint_path",
+          "if(route = '', flow, route)"
+        ]
+      ],
+      "sql": "WITH (q, buckets) -> if(empty(buckets), nan,\n  arrayFirst((v, c) -> c >= q * arrayCumSum(mapValues(buckets))[-1],\n    arrayMap((k, n, c) -> exp2((k + 1 - (c - q * arrayCumSum(mapValues(buckets))[-1]) / n) / 4),\n      mapKeys(buckets), mapValues(buckets), arrayCumSum(mapValues(buckets))),\n    arrayCumSum(mapValues(buckets)))) AS hud_duration_quantile\nSELECT\n  toDateTime(toStartOfInterval(fromUnixTimestamp64Milli({startDateMilliseconds:Int64}), INTERVAL {intervalSeconds:Int64} SECOND), 'UTC') AS ts,\n  service AS job,\n  env AS deployment_environment_name,\n  flow_type AS code_flow_type,\n  flow AS code_flow_name,\n  method AS endpoint_method,\n  if(route = '', flow, route) AS endpoint_path,\n  cur_avg / ref_avg AS value\nFROM (\n  SELECT env, service, flow_type, flow, method, route,\n    avgIf(p90, cur) AS cur_avg, stddevPopIf(p90, cur) AS cur_sd, countIf(cur) AS cur_n,\n    avgIf(p90, NOT cur) AS ref_avg, stddevPopIf(p90, NOT cur) AS ref_sd, countIf(NOT cur) AS ref_n,\n    sumIf(runs, cur) AS cur_runs, sumIf(runs, NOT cur) AS ref_runs,\n    hud_duration_quantile(0.9, sumMapIf(bk, cur)) AS cur_p90\n  FROM (\n    SELECT env, service, flow_type, flow, method, route, hour, hour >= toStartOfHour(toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC')) - INTERVAL 168 HOUR AS cur,\n      sum(duration_count) AS runs, sumMap(buckets) AS bk, hud_duration_quantile(0.9, bk) AS p90\n    FROM hud_otel.endpoint_metrics_lean_1h\n    WHERE hour >= toStartOfHour(toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC')) - INTERVAL 336 HOUR AND hour < toStartOfHour(toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC'))\n    GROUP BY env, service, flow_type, flow, method, route, hour\n    HAVING runs > 0\n  )\n  GROUP BY env, service, flow_type, flow, method, route\n)\nWHERE cur_avg / ref_avg >= 1.7\n  AND cur_n >= 84\n  AND ref_n >= 84\n  AND cur_sd / cur_avg <= 1\n  AND ref_sd / ref_avg <= 1\n  AND ref_avg + 2.58 * ref_sd / sqrt(ref_n) < cur_avg - 2.58 * cur_sd / sqrt(cur_n)\n  AND cur_p90 >= 0.15\n  AND cur_runs >= 350\n  AND ref_runs >= 350\n"
+    },
+    {
+      "name": "HudDayOverWeekDegradation",
+      "install": true,
+      "interval": "1h",
+      "threshold": 1.7,
+      "thresholdType": "above",
+      "severity": "warning",
+      "tags": [
+        "warning"
+      ],
+      "summary": "Hud-style day-over-week p90 degradation on {{attributes.job}} {{attributes.code_flow_name}}",
+      "description": "Average hourly p90 over the last 24h is {{value}}x the preceding 7 days (alert at >= 1.7x, >= 100 invocations per window, >= 12 hourly buckets today and >= 84 in the baseline, p90 >= 150ms).",
+      "note": "Scheduled equivalent of Hud's on-demand day-over-week check. Hourly.",
+      "gaps": [
+        "Percentiles come from the SDK's exponential buckets through hud_duration_quantile, not the AMP native histogram and not Hud's DDSketch.",
+        "Reads complete hours of the hourly tables, by the hour an SDK export ends in: the hour in progress is not counted."
+      ],
+      "columns": [
+        [
+          "job",
+          "service"
+        ],
+        [
+          "deployment_environment_name",
+          "env"
+        ],
+        [
+          "code_flow_type",
+          "flow_type"
+        ],
+        [
+          "code_flow_name",
+          "flow"
+        ],
+        [
+          "endpoint_method",
+          "method"
+        ],
+        [
+          "endpoint_path",
+          "if(route = '', flow, route)"
+        ]
+      ],
+      "sql": "WITH (q, buckets) -> if(empty(buckets), nan,\n  arrayFirst((v, c) -> c >= q * arrayCumSum(mapValues(buckets))[-1],\n    arrayMap((k, n, c) -> exp2((k + 1 - (c - q * arrayCumSum(mapValues(buckets))[-1]) / n) / 4),\n      mapKeys(buckets), mapValues(buckets), arrayCumSum(mapValues(buckets))),\n    arrayCumSum(mapValues(buckets)))) AS hud_duration_quantile\nSELECT\n  toDateTime(toStartOfInterval(fromUnixTimestamp64Milli({startDateMilliseconds:Int64}), INTERVAL {intervalSeconds:Int64} SECOND), 'UTC') AS ts,\n  service AS job,\n  env AS deployment_environment_name,\n  flow_type AS code_flow_type,\n  flow AS code_flow_name,\n  method AS endpoint_method,\n  if(route = '', flow, route) AS endpoint_path,\n  cur_avg / ref_avg AS value\nFROM (\n  SELECT env, service, flow_type, flow, method, route,\n    avgIf(p90, cur) AS cur_avg, stddevPopIf(p90, cur) AS cur_sd, countIf(cur) AS cur_n,\n    avgIf(p90, NOT cur) AS ref_avg, stddevPopIf(p90, NOT cur) AS ref_sd, countIf(NOT cur) AS ref_n,\n    sumIf(runs, cur) AS cur_runs, sumIf(runs, NOT cur) AS ref_runs,\n    hud_duration_quantile(0.9, sumMapIf(bk, cur)) AS cur_p90\n  FROM (\n    SELECT env, service, flow_type, flow, method, route, hour, hour >= toStartOfHour(toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC')) - INTERVAL 24 HOUR AS cur,\n      sum(duration_count) AS runs, sumMap(buckets) AS bk, hud_duration_quantile(0.9, bk) AS p90\n    FROM hud_otel.endpoint_metrics_lean_1h\n    WHERE hour >= toStartOfHour(toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC')) - INTERVAL 192 HOUR AND hour < toStartOfHour(toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC'))\n    GROUP BY env, service, flow_type, flow, method, route, hour\n    HAVING runs > 0\n  )\n  GROUP BY env, service, flow_type, flow, method, route\n)\nWHERE cur_avg / ref_avg >= 1.7\n  AND cur_n >= 12\n  AND ref_n >= 84\n  AND cur_sd / cur_avg <= 1\n  AND ref_sd / ref_avg <= 1\n  AND ref_avg + 2.58 * ref_sd / sqrt(ref_n) < cur_avg - 2.58 * cur_sd / sqrt(cur_n)\n  AND cur_p90 >= 0.15\n  AND cur_runs >= 100\n  AND ref_runs >= 100\n"
+    },
+    {
+      "name": "HudLatencySpike",
+      "install": true,
+      "interval": "5m",
+      "threshold": 1.7,
+      "thresholdType": "above",
+      "severity": "warning",
+      "tags": [
+        "warning"
+      ],
+      "summary": "Hud-style latency spike on {{attributes.job}} {{attributes.code_flow_name}}",
+      "description": "p90 over the last 10m is {{value}}x the average 10m p90 of the previous day (alert at >= 1.7x, >= 50 invocations per window, p90 >= 300ms).",
+      "note": "The window is still 10m against the previous 23h50m, in 10-minute steps back from the evaluation time. ClickStack has no 10m schedule, so this evaluates every 5m.",
+      "gaps": [
+        "Percentiles come from the SDK's exponential buckets through hud_duration_quantile, not the AMP native histogram and not Hud's DDSketch.",
+        "No 10-minute alert interval. The schedule is 5m; the window stays 10m.",
+        "Reads a day of the fine table on every evaluation."
+      ],
+      "columns": [
+        [
+          "job",
+          "service"
+        ],
+        [
+          "deployment_environment_name",
+          "env"
+        ],
+        [
+          "code_flow_type",
+          "flow_type"
+        ],
+        [
+          "code_flow_name",
+          "flow"
+        ],
+        [
+          "endpoint_method",
+          "method"
+        ],
+        [
+          "endpoint_path",
+          "if(route = '', flow, route)"
+        ]
+      ],
+      "sql": "WITH (q, buckets) -> if(empty(buckets), nan,\n  arrayFirst((v, c) -> c >= q * arrayCumSum(mapValues(buckets))[-1],\n    arrayMap((k, n, c) -> exp2((k + 1 - (c - q * arrayCumSum(mapValues(buckets))[-1]) / n) / 4),\n      mapKeys(buckets), mapValues(buckets), arrayCumSum(mapValues(buckets))),\n    arrayCumSum(mapValues(buckets)))) AS hud_duration_quantile\nSELECT\n  toDateTime(toStartOfInterval(fromUnixTimestamp64Milli({startDateMilliseconds:Int64}), INTERVAL {intervalSeconds:Int64} SECOND), 'UTC') AS ts,\n  service AS job,\n  env AS deployment_environment_name,\n  flow_type AS code_flow_type,\n  flow AS code_flow_name,\n  method AS endpoint_method,\n  if(route = '', flow, route) AS endpoint_path,\n  cur_p90 / ref_avg AS value\nFROM (\n  SELECT env, service, flow_type, flow, method, route,\n    hud_duration_quantile(0.9, sumMapIf(bk, age = 0)) AS cur_p90, sumIf(runs, age = 0) AS cur_runs,\n    avgIf(p90, age > 0) AS ref_avg, stddevPopIf(p90, age > 0) AS ref_sd, countIf(age > 0) AS ref_n,\n    sumIf(runs, age > 0) AS ref_runs\n  FROM (\n    SELECT env, service, flow_type, flow, method, route, intDiv(dateDiff('second', t, toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC')), 600) AS age,\n      sum(duration_count) AS runs, sumMap(buckets) AS bk, hud_duration_quantile(0.9, bk) AS p90\n    FROM hud_otel.endpoint_durations\n    WHERE t > toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC') - INTERVAL 24 HOUR AND t <= toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC')\n    GROUP BY env, service, flow_type, flow, method, route, age\n    HAVING runs > 0\n  )\n  GROUP BY env, service, flow_type, flow, method, route\n)\nWHERE cur_p90 / ref_avg >= 1.7\n  AND cur_p90 >= 0.3\n  AND ref_n >= 72\n  AND ref_sd / ref_avg <= 1\n  AND ref_avg + 2.58 * ref_sd / sqrt(ref_n) < cur_p90\n  AND cur_runs >= 50\n  AND ref_runs >= 50\n"
+    },
+    {
+      "name": "HudErrorRateSpike",
+      "install": true,
+      "interval": "1h",
+      "threshold": 0.05,
+      "thresholdType": "above",
+      "severity": "critical",
+      "tags": [
+        "critical",
+        "alpha"
+      ],
+      "summary": "[alpha] Error rate spike on {{attributes.job}} {{attributes.code_flow_name}}",
+      "description": "Error {{attributes.issue_fingerprint}} rate {{value}} over the last hour (>= 5%), above twice its p99 hourly rate of the previous 8 days (>= 50 invocations).",
+      "note": "Alpha, same as the OpenSearch rule. SQS uses message count; other flows use the run count. A fingerprint with no baseline hour does not fire. Hours with fewer than 20 invocations are left out of the baseline.",
+      "gaps": [
+        "An issue row has no status code column: 4xx is told from framework_result, and the method and path come from the flow's runs.",
+        "Reads complete hours of the hourly tables, by the hour an SDK export ends in: the hour in progress is not counted."
+      ],
+      "columns": [
+        [
+          "job",
+          "service"
+        ],
+        [
+          "deployment_environment_name",
+          "env"
+        ],
+        [
+          "code_flow_type",
+          "flow_type"
+        ],
+        [
+          "code_flow_name",
+          "flow"
+        ],
+        [
+          "endpoint_method",
+          "method"
+        ],
+        [
+          "endpoint_path",
+          "if(route = '', flow, route)"
+        ],
+        [
+          "issue_fingerprint",
+          "fingerprint"
+        ]
+      ],
+      "sql": "SELECT\n  toDateTime(toStartOfInterval(fromUnixTimestamp64Milli({startDateMilliseconds:Int64}), INTERVAL {intervalSeconds:Int64} SECOND), 'UTC') AS ts,\n  service AS job,\n  env AS deployment_environment_name,\n  flow_type AS code_flow_type,\n  flow AS code_flow_name,\n  method AS endpoint_method,\n  if(route = '', flow, route) AS endpoint_path,\n  fingerprint AS issue_fingerprint,\n  rate AS value\nFROM (\n  SELECT env, service, flow_type, flow, fingerprint, max(method) AS method, max(route) AS route,\n    sumIf(errors / runs, hour = toStartOfHour(toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC')) - INTERVAL 1 HOUR) AS rate, sumIf(runs, hour = toStartOfHour(toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC')) - INTERVAL 1 HOUR) AS last_runs,\n    quantileExactInclusiveIf(0.99)(errors / runs, NOT (hour = toStartOfHour(toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC')) - INTERVAL 1 HOUR) AND runs >= 20) AS baseline,\n    countIf(NOT (hour = toStartOfHour(toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC')) - INTERVAL 1 HOUR) AND runs >= 20) AS baseline_n\n  FROM (\n    SELECT env, service, flow_type, flow, fingerprint, hour, sum(issues) AS errors\n    FROM hud_otel.endpoint_metrics_lean_1h\n    WHERE hour >= toStartOfHour(toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC')) - INTERVAL 193 HOUR AND hour < toStartOfHour(toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC')) AND issues > 0 AND NOT match(framework_result, '^4..$')\n    GROUP BY env, service, flow_type, flow, fingerprint, hour\n  ) AS i\n  INNER JOIN (\n    SELECT env, service, flow_type, flow, hour, max(method) AS method, max(route) AS route,\n      if(flow_type = 'sqs', sum(messages), toFloat64(sum(duration_count))) AS runs\n    FROM hud_otel.endpoint_metrics_lean_1h\n    WHERE hour >= toStartOfHour(toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC')) - INTERVAL 193 HOUR AND hour < toStartOfHour(toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC'))\n    GROUP BY env, service, flow_type, flow, hour\n    HAVING runs > 0\n  ) AS d USING (env, service, flow_type, flow, hour)\n  GROUP BY env, service, flow_type, flow, fingerprint\n)\nWHERE rate >= 0.05\n  AND baseline_n >= 1\n  AND rate > 2 * baseline\n  AND last_runs >= 50\n"
+    },
+    {
+      "name": "HudFunctionDayOverWeekDegradation",
+      "install": false,
+      "interval": "1h",
+      "threshold": 1.7,
+      "thresholdType": "above",
+      "severity": "warning",
+      "tags": [
+        "warning"
+      ],
+      "summary": "Hud-style function p90 degradation on {{attributes.job}} {{attributes.code_function_name}}",
+      "description": "Function p90 over the last 24h is {{value}}x the preceding 7 days (alert at >= 1.7x, >= 100 calls in both windows, p90 >= 150ms).",
+      "note": "Not installed. The function regex is __NO_FUNCTION_SELECTED__, which matches nothing. Set that regex to the functions you watch and import with --include-inert. Function durations are sampled, calls are not.",
+      "gaps": [
+        "Percentiles come from the SDK's exponential buckets through hud_duration_quantile, not the AMP native histogram and not Hud's DDSketch.",
+        "Reads complete hours of the hourly tables, by the hour an SDK export ends in: the hour in progress is not counted.",
+        "Inert until the function regex is edited. Import skips it unless --include-inert."
+      ],
+      "columns": [
+        [
+          "job",
+          "service"
+        ],
+        [
+          "deployment_environment_name",
+          "env"
+        ],
+        [
+          "code_function_name",
+          "function"
+        ],
+        [
+          "code_file_path",
+          "file"
+        ],
+        [
+          "endpoint_path",
+          "function"
+        ]
+      ],
+      "sql": "WITH (q, buckets) -> if(empty(buckets), nan,\n  arrayFirst((v, c) -> c >= q * arrayCumSum(mapValues(buckets))[-1],\n    arrayMap((k, n, c) -> exp2((k + 1 - (c - q * arrayCumSum(mapValues(buckets))[-1]) / n) / 4),\n      mapKeys(buckets), mapValues(buckets), arrayCumSum(mapValues(buckets))),\n    arrayCumSum(mapValues(buckets)))) AS hud_duration_quantile\nSELECT\n  toDateTime(toStartOfInterval(fromUnixTimestamp64Milli({startDateMilliseconds:Int64}), INTERVAL {intervalSeconds:Int64} SECOND), 'UTC') AS ts,\n  service AS job,\n  env AS deployment_environment_name,\n  function AS code_function_name,\n  file AS code_file_path,\n  function AS endpoint_path,\n  cur_p90 / ref_p90 AS value\nFROM (\n  SELECT env, service, function, file,\n    hud_duration_quantile(0.9, sumMapIf(buckets, hour >= toStartOfHour(toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC')) - INTERVAL 24 HOUR)) AS cur_p90,\n    hud_duration_quantile(0.9, sumMapIf(buckets, NOT (hour >= toStartOfHour(toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC')) - INTERVAL 24 HOUR))) AS ref_p90,\n    sumIf(calls, hour >= toStartOfHour(toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC')) - INTERVAL 24 HOUR) AS cur_calls, sumIf(calls, NOT (hour >= toStartOfHour(toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC')) - INTERVAL 24 HOUR)) AS ref_calls\n  FROM hud_otel.function_metrics_lean_1h\n  WHERE hour >= toStartOfHour(toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC')) - INTERVAL 192 HOUR AND hour < toStartOfHour(toDateTime(fromUnixTimestamp64Milli({endDateMilliseconds:Int64}), 'UTC'))\n    AND match(function, '^(?:__NO_FUNCTION_SELECTED__)$')\n  GROUP BY env, service, function, file\n)\nWHERE cur_p90 / ref_p90 >= 1.7\n  AND cur_p90 >= 0.15\n  AND cur_calls >= 100\n  AND ref_calls >= 100\n"
+    }
+  ]
+}
